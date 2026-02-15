@@ -1,0 +1,90 @@
+# ==============================================================================
+# DOCKERFILE: Attention Map Heatmap Generation (RTX 3090 / Ampere)
+# ==============================================================================
+# Description:
+#   Defines the computational environment for the Attention Map visualization
+#   pipeline. Builds upon the NVIDIA CUDA development image and configures
+#   a Python virtual environment optimized for Ampere GPUs (RTX 3090).
+# ==============================================================================
+
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+LABEL maintainer="Thesis-Attention-Map-Project"
+
+# ==============================================================================
+# 1. ENVIRONMENT CONFIGURATION
+# ==============================================================================
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+WORKDIR /workspace
+
+# CUDA Architecture flags for PyTorch
+# 8.0 = NVIDIA A100, 8.6 = NVIDIA RTX 3090 (Ampere)
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX"
+
+# ==============================================================================
+# 2. SYSTEM DEPENDENCIES
+# ==============================================================================
+
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    python3 \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================================
+# 3. PYTHON ENVIRONMENT SETUP
+# ==============================================================================
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    wheel \
+    setuptools \
+    packaging \
+    ninja \
+    wrapt
+
+# ==============================================================================
+# 4. PYTORCH INSTALLATION
+# ==============================================================================
+
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ==============================================================================
+# 5. PROJECT DEPENDENCIES
+# ==============================================================================
+
+COPY docker/requirements.txt .
+
+RUN grep -vE "^torch|^torchvision|^torchaudio" requirements.txt > requirements_clean.txt && \
+    pip install --no-cache-dir -r requirements_clean.txt
+
+# ==============================================================================
+# 6. APPLICATION DEPLOYMENT
+# ==============================================================================
+
+COPY . /workspace
+RUN mkdir -p /workspace/data /workspace/results
+VOLUME ["/workspace/data", "/workspace/results"]
+
+# ==============================================================================
+# 7. ENTRYPOINT
+# ==============================================================================
+
+CMD ["python3", "src/generate_heatmaps.py", "--help"]

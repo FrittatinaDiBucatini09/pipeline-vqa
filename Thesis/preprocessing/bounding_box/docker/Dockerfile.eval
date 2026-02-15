@@ -1,0 +1,44 @@
+# ==============================================================================
+# DOCKERFILE: Bounding Box Evaluation (CPU-Only / Lightweight)
+# ==============================================================================
+# Description:
+#   Minimal Python environment for running the IoU evaluation script.
+#   No GPU or PyTorch required — uses only Pillow, NumPy, and stdlib.
+# ==============================================================================
+
+FROM python:3.10-slim
+LABEL maintainer="Thesis-GEMEX-Project"
+
+# ==============================================================================
+# 1. ENVIRONMENT CONFIGURATION
+# ==============================================================================
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /workspace
+
+# ==============================================================================
+# 2. DEPENDENCIES
+# ==============================================================================
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    numpy \
+    Pillow
+
+# ==============================================================================
+# 3. APPLICATION DEPLOYMENT
+# ==============================================================================
+
+COPY src/evaluate_bbox.py /workspace/evaluate_bbox.py
+
+RUN mkdir -p /workspace/results
+
+VOLUME ["/workspace/results"]
+
+# ==============================================================================
+# 4. ENTRYPOINT
+# ==============================================================================
+
+CMD ["python3", "evaluate_bbox.py", "--help"]

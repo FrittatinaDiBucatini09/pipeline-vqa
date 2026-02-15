@@ -1,0 +1,34 @@
+# Environment & secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv*/
+
+# HuggingFace / model caches
+hf_cache/
+
+# SLURM logs
+slurm-*.out
+slurm_*.out
+slurm_*.err
+
+# Docker build artifacts
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# CSV data files (large, track separately)
+*.csv
+
+# Refactoring script (one-time use)
+refactor_repo.sh

@@ -1,0 +1,46 @@
+# --- Version Control & IDE ---
+.git
+.gitignore
+.vscode
+.idea
+*.DS_Store
+
+# --- Python Artifacts ---
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual Environments ---
+venv/
+venv_prep/
+.venv/
+env/
+
+# --- Heavy Data & Results ---
+results/
+data/
+*.parquet
+
+# --- Caches ---
+hf_cache/
+scripts/hf_cache/
+gemex_cache/
+scripts/gemex_cache/
+prepare_datasets/gemex_cache/
+.cache/
+__MACOSX/
+
+# --- Logs & Runtime Outputs ---
+slurm_*.out
+slurm_*.err
+wandb/
+report.txt
+
+# --- Secrets ---
+.env
+
+# --- Docker Artifacts ---
+Dockerfile*
+docker-compose*
+submit_bbox_preprocessing.sh

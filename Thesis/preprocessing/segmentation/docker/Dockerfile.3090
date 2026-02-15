@@ -1,0 +1,104 @@
+# ==============================================================================
+# DOCKERFILE: Unified Pipeline (BiomedCLIP + MedSAM)
+# ==============================================================================
+# Base Image: NVIDIA CUDA 12.2 (Compatible with Cluster Drivers)
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+LABEL maintainer="Thesis-Segmentation-Project"
+
+# ==============================================================================
+# 1. ENVIRONMENT SETUP
+# ==============================================================================
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Working Directory
+WORKDIR /workspace
+
+# CUDA Architecture for RTX 3090 (Ampere = 8.6)
+ENV TORCH_CUDA_ARCH_LIST="8.6"
+
+# PYTHONPATH: Crucial for modular imports (src.step1..., src.step2...)
+ENV PYTHONPATH="${PYTHONPATH}:/workspace/src"
+
+# ==============================================================================
+# 2. SYSTEM DEPENDENCIES
+# ==============================================================================
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    wget \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    python3 \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================================
+# 3. PYTHON ENVIRONMENT
+# ==============================================================================
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    wheel \
+    setuptools \
+    packaging \
+    ninja \
+    wrapt
+
+# ==============================================================================
+# 4. PYTORCH INSTALLATION (Cached Layer)
+# ==============================================================================
+# Installing PyTorch 2.1+ compatible with CUDA 12.1
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ==============================================================================
+# 5. PROJECT DEPENDENCIES
+# ==============================================================================
+COPY docker/requirements.txt .
+
+# Install dependencies (filtering out torch to avoid overwriting)
+RUN grep -vE "^torch|^torchvision|^torchaudio" requirements.txt > requirements_clean.txt && \
+    pip install --no-cache-dir -r requirements_clean.txt
+
+# ==============================================================================
+# 5b. MEDSAM2 (SAM 2.1) INSTALLATION
+# ==============================================================================
+# MedSAM2 requires the sam2 package from the bowang-lab repo
+RUN git clone https://github.com/bowang-lab/MedSAM2.git /tmp/MedSAM2 && \
+    cd /tmp/MedSAM2 && \
+    pip install --no-cache-dir -e . && \
+    rm -rf /tmp/MedSAM2/.git
+
+# ==============================================================================
+# 6. SOURCE CODE & FILE SYSTEM
+# ==============================================================================
+# Copy the source code modules
+COPY src /workspace/src
+
+# Create necessary directories for mounting
+RUN mkdir -p /workspace/data/results \
+             /workspace/checkpoints \
+             /workspace/configs \
+             /workspace/metadata \
+             /workspace/hf_cache
+
+# Expose Volumes
+VOLUME ["/workspace/data", "/workspace/checkpoints", "/workspace/configs"]
+
+# ==============================================================================
+# 7. ENTRYPOINT
+# ==============================================================================
+# Default behavior: Print help
+CMD ["python3", "-c", "print('✅ Container Ready. Use ./run_pipeline.sh to start.')"]

@@ -1,0 +1,51 @@
+# Use this Dockerfile if you want to run on NVIDIA_GEFORCE_3090
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+LABEL maintainer="disi-Unibo-NLP"
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /workspace
+ENV APP_PATH=/workspace
+
+# Architettura specifica per RTX 3090 (Ampere)
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX"
+
+# Install dependencies
+RUN apt-get update -y && \
+    apt-get install -y curl \
+                       git \
+                       bash \
+                       nano \
+                       python3 \
+                       python3-pip \
+                       python3-venv && \
+    apt-get autoremove -y && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip
+RUN pip install --upgrade pip
+RUN pip install wheel setuptools packaging ninja
+
+RUN pip install wrapt --upgrade --ignore-installed
+RUN pip install gdown
+
+# Install requirements
+COPY docker/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install PyTorch Stable (Compatibile con CUDA 12.1/12.2)
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# Install flash-attn
+RUN VLLM_FLASH_ATTN_VERSION=2 MAX_JOBS=16 pip install flash-attn --no-build-isolation
+
+ENV DEBIAN_FRONTEND=dialog

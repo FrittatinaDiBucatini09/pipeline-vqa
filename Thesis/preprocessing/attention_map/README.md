@@ -1,0 +1,54 @@
+# Attention Map: Dense Heatmap Visualization Pipeline
+
+Generates visual explanations (attention heatmaps) from **BiomedCLIP + gScoreCAM** overlaid on medical X-Ray images. Adapted from the Bounding Box pipeline — same model/data logic, but outputs **colored heatmap overlay images** instead of discrete bounding boxes.
+
+## Output
+
+Each input image produces a `.png` file with a **JET/TURBO colormap** overlay:
+- **Red** = High model attention (gScoreCAM activation)
+- **Blue** = Low model attention
+- Background artifacts (text, markers) are suppressed via Otsu body masking
+
+## Quick Start
+
+```bash
+# From the Attention_Map/ directory:
+sbatch submit_heatmap_gen.sh [configs/gemex/exp_01_vqa.conf]
+```
+
+## Key Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ALPHA` | `0.5` | Blending factor (0=original, 1=heatmap only) |
+| `COLORMAP` | `jet` | Colormap: `jet`, `turbo`, `inferno`, `hot` |
+| `SAVE_RAW_CAM` | `false` | Also save raw grayscale CAM |
+| `ENABLE_BODY_MASK` | `true` | Suppress background with Otsu thresholding |
+| `SKIP_CRF` | `true` | Set to `false` to enable Dense CRF refinement |
+| `CAM_VERSION` | `gScoreCAM` | Class Activation Map method |
+| `STOP_AFTER` | `5` | Limit processing (set empty for full run) |
+
+## Directory Structure
+
+```
+Attention_Map/
+├── configs/                  # Experiment configs (shared with Bounding_Box)
+├── scripts/
+│   ├── generate_heatmaps.py  # Main pipeline script
+│   ├── utils.py              # CAMWrapper, reshape_transform
+│   ├── Dockerfile.3090       # Docker environment
+│   ├── run_heatmap_gen.sh    # Docker wrapper
+│   └── requirements.txt      # Python dependencies
+├── results/                  # Output heatmap images
+├── submit_heatmap_gen.sh     # Slurm entry point
+└── README.md
+```
+
+## Differences from Bounding Box Pipeline
+
+| Aspect | Bounding Box | Attention Map |
+|--------|-------------|---------------|
+| Output | JSONL coordinates + box overlays | PNG heatmap overlay images |
+| Post-processing | CRF, contours, adaptive padding | Normalize → Colormap → Alpha blend |
+| Dependencies | pydensecrf | None (removed) |
+| Script | `bbox_preprocessing.py` | `generate_heatmaps.py` |

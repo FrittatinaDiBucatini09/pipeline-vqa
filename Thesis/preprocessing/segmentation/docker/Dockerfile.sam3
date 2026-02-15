@@ -1,0 +1,109 @@
+# ==============================================================================
+# DOCKERFILE: MedSAM3 (SAM3 + LoRA) Pipeline
+# ==============================================================================
+# Uses CUDA 12.2 base (compatible with cluster driver) + Python 3.12 via PPA.
+# PyTorch 2.7 bundles its own CUDA runtime, so the container CUDA version
+# only needs to match the host driver — not SAM3's docs.
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+LABEL maintainer="Thesis-Segmentation-Project"
+
+# ==============================================================================
+# 1. ENVIRONMENT SETUP
+# ==============================================================================
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /workspace
+
+# PYTHONPATH for modular imports
+# /opt/MedSAM3 is needed so infer_sam.py and lora_layers.py are importable
+ENV PYTHONPATH="${PYTHONPATH}:/workspace/src:/opt/MedSAM3"
+
+# ==============================================================================
+# 2. SYSTEM DEPENDENCIES + Python 3.12
+# ==============================================================================
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    wget \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update -y \
+    && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
+    python3.12-tk \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ==============================================================================
+# 3. PYTHON VIRTUAL ENVIRONMENT (3.12)
+# ==============================================================================
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    wheel \
+    setuptools \
+    packaging \
+    ninja \
+    wrapt
+
+# ==============================================================================
+# 4. PYTORCH INSTALLATION (2.5.1 with cu121 — compatible with host driver)
+# ==============================================================================
+RUN pip install --no-cache-dir \
+    torch==2.5.1 \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ==============================================================================
+# 5. SAM3 BASE MODEL (Facebook Research)
+# ==============================================================================
+RUN git clone https://github.com/facebookresearch/sam3.git /opt/sam3 && \
+    cd /opt/sam3 && \
+    pip install --no-cache-dir -e . && \
+    rm -rf /opt/sam3/.git
+
+# ==============================================================================
+# 6. MEDSAM3 (SAM3 + LoRA Fine-tuning)
+# ==============================================================================
+RUN git clone https://github.com/Joey-S-Liu/MedSAM3.git /opt/MedSAM3 && \
+    cd /opt/MedSAM3 && \
+    pip install --no-cache-dir -e . && \
+    rm -rf /opt/MedSAM3/.git
+
+# ==============================================================================
+# 7. PROJECT DEPENDENCIES
+# ==============================================================================
+COPY docker/requirements.txt .
+
+# Install deps (filter torch to avoid overwriting, filter segment-anything as not needed here)
+RUN grep -vE "^torch|^torchvision|^torchaudio|segment-anything" requirements.txt > requirements_clean.txt && \
+    pip install --no-cache-dir -r requirements_clean.txt
+
+# ==============================================================================
+# 8. SOURCE CODE & FILE SYSTEM
+# ==============================================================================
+COPY src /workspace/src
+
+RUN mkdir -p /workspace/data/results \
+             /workspace/checkpoints \
+             /workspace/configs \
+             /workspace/metadata \
+             /workspace/hf_cache
+
+VOLUME ["/workspace/data", "/workspace/checkpoints", "/workspace/configs"]
+
+# ==============================================================================
+# 9. ENTRYPOINT
+# ==============================================================================
+CMD ["python3", "-c", "print('✅ MedSAM3 Container Ready. Use ./run_pipeline.sh to start.')"]
