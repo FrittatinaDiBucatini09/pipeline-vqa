@@ -44,6 +44,10 @@ echo "=========================================================="
 # ------------------------------------------------------------------------------
 DATASET_DIR="/datasets/MIMIC-CXR"
 METADATA_FILE="/workspace/metadata/gemex_VQA_mimic_mapped.csv"
+if [ -n "$DATA_FILE_OVERRIDE" ]; then
+    METADATA_FILE="/workspace/metadata/$DATA_FILE_OVERRIDE"
+    echo "🔵 [OVERRIDE] Forcing Dataset: $METADATA_FILE"
+fi
 BASE_OUT="/workspace/data/results"
 
 # Step-specific output directories
@@ -104,10 +108,27 @@ run_step_1() {
 
     # 4. PIPELINE EXECUTION
     # Assumes run_localization.py is located in src/step1_localization/
+    
+    # Disable immediate exit to handle potential cleanup crashes
+    set +e
     python3 src/step1_localization/run_localization.py "${CMD_ARGS[@]}"
+    EXIT_CODE=$?
+    set -e
 
-    echo "✅ Step 1 completed successfully."
-    echo "   Output file: $JSONL_INTERMEDIATE"
+    # Check if critical output exists
+    if [ -f "$JSONL_INTERMEDIATE" ] && [ -s "$JSONL_INTERMEDIATE" ]; then
+        if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ Step 1 completed successfully."
+        else
+            echo "⚠️ [WARNING] Step 1 finished with non-zero exit code ($EXIT_CODE), but output file exists."
+            echo "   Proceeding to Step 2..."
+        fi
+        echo "   Output file: $JSONL_INTERMEDIATE"
+    else
+        echo "❌ [ERROR] Step 1 failed (Exit Code: $EXIT_CODE) and output file is missing/empty."
+        echo "   Expected: $JSONL_INTERMEDIATE"
+        exit $EXIT_CODE
+    fi
 }
 
 # ==============================================================================

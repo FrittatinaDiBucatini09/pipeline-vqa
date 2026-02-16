@@ -17,6 +17,7 @@
 #SBATCH --error=slurm_vqa_%j.err
 #SBATCH -N 1
 #SBATCH --gpus=nvidia_geforce_rtx_3090:1
+#SBATCH --time=15:00:00
 #SBATCH -w faretra
 
 # ----------------------------------------------------
@@ -84,13 +85,37 @@ if [ -z "$HF_TOKEN" ]; then
 fi
 
 # ----------------------------------------------------
-# 4. CONTAINER EXECUTION
+# 4. PREPROCESSING BRIDGE DETECTION
+# ----------------------------------------------------
+# When VQA_IMAGE_PATH is set externally (by the orchestrator bridge),
+# it points to the bbox preprocessing output directory on the host.
+# We mount it as a separate read-only volume inside the container.
+
+EXTRA_MOUNTS=""
+DOCKER_VQA_IMAGE_PATH="/workspace"
+
+if [ -n "$VQA_IMAGE_PATH" ] && [ -d "$VQA_IMAGE_PATH" ] && [ "$VQA_IMAGE_PATH" != "$PHYS_DIR" ]; then
+    echo "🔗 [BRIDGE MODE] Preprocessing output detected at: $VQA_IMAGE_PATH"
+    EXTRA_MOUNTS="-v $VQA_IMAGE_PATH:/preprocessed_images:ro"
+    DOCKER_VQA_IMAGE_PATH="/preprocessed_images"
+
+    # Remap DATA_FILE_OVERRIDE to the container path if it points into VQA_IMAGE_PATH
+    if [ -n "$DATA_FILE_OVERRIDE" ]; then
+        OVERRIDE_BASENAME=$(basename "$DATA_FILE_OVERRIDE")
+        DATA_FILE_OVERRIDE="/preprocessed_images/$OVERRIDE_BASENAME"
+        echo "🔗 [BRIDGE MODE] DATA_FILE_OVERRIDE remapped to: $DATA_FILE_OVERRIDE"
+    fi
+fi
+
+# ----------------------------------------------------
+# 5. CONTAINER EXECUTION
 # ----------------------------------------------------
 
 echo "🚀 Starting Container..."
 echo "   -> Node: $SLURMD_NODENAME"
 echo "   -> GPU:  $CUDA_VISIBLE_DEVICES"
 echo "   -> Image: $IMAGE_NAME"
+echo "   -> VQA_IMAGE_PATH: $DOCKER_VQA_IMAGE_PATH"
 
 # Note on the Docker Command:
 # We pass "$CONFIG_FILE" at the end. This argument travels through Docker
@@ -99,12 +124,15 @@ echo "   -> Image: $IMAGE_NAME"
 docker run \
     --rm \
     --gpus "device=$CUDA_VISIBLE_DEVICES" \
+    --memory="30g" \
     --shm-size=16g \
     -v "$PHYS_DIR":/workspace \
     -v "$LLM_CACHE_DIR":/llms \
-    -v "/datasets:/datasets" \
+    -v "/datasets:/datasets:ro" \
+    $EXTRA_MOUNTS \
     -e HF_HOME="/llms" \
-    -e VQA_IMAGE_PATH="/workspace" \
+    -e VQA_IMAGE_PATH="$DOCKER_VQA_IMAGE_PATH" \
     -e HF_TOKEN="$HF_TOKEN" \
+    -e DATA_FILE_OVERRIDE="${DATA_FILE_OVERRIDE:-}" \
     "$IMAGE_NAME" \
     /bin/bash /workspace/scripts/run_generation.sh "$CONFIG_FILE"

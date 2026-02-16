@@ -255,6 +255,7 @@ def run_inference(args):
     # Counters
     processed = 0
     skipped = 0
+    vqa_manifest_records = []  # Collects (image_path, question, answer) for VQA bridge
 
     # 4. Processing Loop
     for item in tqdm(data):
@@ -366,14 +367,31 @@ def run_inference(args):
                     (int(prompt_box_draw[2]), int(prompt_box_draw[3])),
                     (0, 255, 255), 2
                 )
+            overlay_filename = f"{out_name}_overlay.png"
             cv2.imwrite(
-                os.path.join(overlay_dir, f"{out_name}_overlay.png"),
+                os.path.join(overlay_dir, overlay_filename),
                 cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
             )
-        
+
+            # Collect record for VQA manifest (overlay is the VQA-relevant image)
+            vqa_manifest_records.append({
+                'image_path': f"overlays/{overlay_filename}",
+                'question': item.get('question', item.get('prompt_used', '')),
+                'answer': item.get('answer', ''),
+            })
+
         processed += 1
 
     print(f"Done. Processed: {processed} | Skipped: {skipped}")
+
+    # Generate VQA-ready manifest for downstream pipeline stages
+    if vqa_manifest_records:
+        import pandas as pd_manifest
+        manifest_path = os.path.join(args.output_dir, "vqa_manifest.csv")
+        pd_manifest.DataFrame(vqa_manifest_records).to_csv(manifest_path, index=False)
+        print(f"[INFO] VQA manifest generated: {manifest_path} ({len(vqa_manifest_records)} rows)")
+    else:
+        print("[WARNING] No overlay records collected. VQA manifest not generated.")
 
 
 def main():

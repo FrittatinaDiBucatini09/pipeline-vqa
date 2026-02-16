@@ -17,25 +17,36 @@ Usage:
 
 import os
 import random
+import argparse
 import pandas as pd
 from pathlib import Path
 from datasets import load_dataset
 from tqdm import tqdm
 
-# --- CONFIGURATION ---
-MIMIC_ROOT_DIR = Path("/datasets/MIMIC-CXR/files")  
-OUTPUT_CSV = "../gemex_mimic_mapped.csv"
+# --- CONFIGURATION DEFAULTS ---
+DEFAULT_MIMIC_ROOT_DIR = "/datasets/MIMIC-CXR/files"
+DEFAULT_OUTPUT_CSV = "../gemex_mimic_mapped.csv"
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.dcm', '.webp'}
 
-# MAX QUESTIONS PER IMAGE:
-# Set to an integer (e.g., 3) to keep a random subset of questions per image.
-# Set to None to keep ALL 11 questions per image (Warning: Dataset size will explode).
-MAX_QUESTIONS_PER_IMAGE = 6
-
-# Random Seed for Reproducibility
-RANDOM_SEED = 42
+def parse_args():
+    parser = argparse.ArgumentParser(description='GEMeX to MIMIC-CXR Mapping Utility')
+    parser.add_argument('--mimic_root_dir', type=str, default=DEFAULT_MIMIC_ROOT_DIR,
+                       help='Root directory of MIMIC-CXR files')
+    parser.add_argument('--output_csv', type=str, default=DEFAULT_OUTPUT_CSV,
+                       help='Output CSV file path')
+    parser.add_argument('--max_questions_per_image', type=int, default=6,
+                       help='Max questions per image (None for all)')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed for reproducibility')
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
+    MIMIC_ROOT_DIR = Path(args.mimic_root_dir)
+    OUTPUT_CSV = args.output_csv
+    MAX_QUESTIONS_PER_IMAGE = args.max_questions_per_image
+    RANDOM_SEED = args.seed
+
     print("[INFO] Setting random seed for reproducibility...")
     random.seed(RANDOM_SEED)
 

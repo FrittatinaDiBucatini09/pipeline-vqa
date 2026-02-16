@@ -48,7 +48,7 @@ echo "=========================================="
 docker run --rm --gpus '"device=0"' \
     -v "$PWD":/workspace \
     -v /llms:/llms \
-    -v /dataset:/dataset:ro \
+    -v /datasets:/datasets:ro \
     -e HF_HOME=/llms \
     med_vqa_project:3090 \
     python3 src/generate_vqa.py \

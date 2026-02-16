@@ -4,10 +4,27 @@ Generates visual explanations (attention heatmaps) from **BiomedCLIP + gScoreCAM
 
 ## Output
 
+### Visual Outputs
+
 Each input image produces a `.png` file with a **JET/TURBO colormap** overlay:
 - **Red** = High model attention (gScoreCAM activation)
 - **Blue** = Low model attention
 - Background artifacts (text, markers) are suppressed via Otsu body masking
+
+### VQA Integration
+
+The pipeline automatically generates a `vqa_manifest.csv` file for downstream VQA integration:
+
+```csv
+image_path,question,answer
+files/p10/p10268877/s50042142/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_idx1.png,What is the position of the ET tube as seen in the CXR?,C
+files/p10/p10268877/s50042142/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_idx2.png,What could be inferred from the NG tube's positioning as noted in the CXR?,NG tube tip is in the stomach.
+```
+
+**Benefits:**
+- **Seamless Orchestration:** When chaining `attn_map → vqa_gen` in the orchestrator, the VQA stage automatically uses the heatmap images
+- **One Row Per Heatmap:** Multi-region questions create multiple manifest rows
+- **Metadata Preserved:** Original questions and answers maintained for evaluation
 
 ## Quick Start
 

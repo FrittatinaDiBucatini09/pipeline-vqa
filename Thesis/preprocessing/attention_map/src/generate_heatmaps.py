@@ -497,6 +497,28 @@ def load_dataframe(path: str) -> pd.DataFrame:
     return pd.read_parquet(path) if path.endswith('.parquet') else pd.read_csv(path)
 
 
+def generate_vqa_manifest(manifest_records: List[Dict], output_root: Path) -> None:
+    """
+    Writes a VQA-ready CSV manifest from the collected records.
+
+    Each record maps a generated heatmap image to its original question/answer,
+    enabling the downstream VQA generation stage to consume preprocessed images.
+
+    Args:
+        manifest_records: List of dicts with keys: image_path, question, answer.
+        output_root: Path to the preprocessing output directory.
+    """
+    manifest_path = output_root / "vqa_manifest.csv"
+
+    if not manifest_records:
+        print("[WARNING] No records collected for VQA manifest. Skipping.")
+        return
+
+    df = pd.DataFrame(manifest_records)
+    df.to_csv(manifest_path, index=False)
+    print(f"[INFO] VQA manifest generated: {manifest_path} ({len(df)} rows)")
+
+
 def _save_heatmap_async(cam_map, original_bgr, save_path, alpha, colormap, 
                         body_mask, save_raw_cam, prompt):
     """Thread-safe wrapper for async heatmap saving."""
@@ -725,7 +747,8 @@ def main():
     processed = 0
     failed_count = 0
     errors = []
-    
+    vqa_manifest_records = []  # Collects (image_path, question, answer) for VQA bridge
+
     # Thread Pool for I/O (Disk Writes)
     io_executor = ThreadPoolExecutor(max_workers=4)
 
@@ -805,6 +828,14 @@ def main():
                             )
                             processed += 1
 
+                            # Collect record for VQA manifest
+                            raw_data = batch['raw_metadata'][i]
+                            vqa_manifest_records.append({
+                                'image_path': str(relative_save_path),
+                                'question': raw_data.get(args.text_col, ''),
+                                'answer': raw_data.get('answer', ''),
+                            })
+
                 # === STANDARD / EXPLODED MODE ===
                 else:
                     cams = model.process_batch(tensors, prompts)
@@ -844,6 +875,14 @@ def main():
                             prompts[i] if args.draw_labels else ""
                         )
                         processed += 1
+
+                        # Collect record for VQA manifest
+                        raw_data = batch['raw_metadata'][i]
+                        vqa_manifest_records.append({
+                            'image_path': str(relative_save_path),
+                            'question': raw_data.get(args.text_col, ''),
+                            'answer': raw_data.get('answer', ''),
+                        })
 
                 # WandB Logging (Periodic Sampling)
                 if batch_idx % 50 == 0:
@@ -912,6 +951,9 @@ def main():
     print(f"\n[SUCCESS] Heatmap generation complete.")
     print(f"[REPORT]  Saved to: {report_path}")
     print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+
+    # Generate VQA-ready manifest for downstream pipeline stages
+    generate_vqa_manifest(vqa_manifest_records, output_root)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,13 @@
 
 # --- GPU & CUDA Settings ---
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True # Allow PyTorch to expand memory segments as needed
-export CUDA_VISIBLE_DEVICES=0 # Use the first GPU device; adjust as necessary for multi-GPU setups
+# Respect existing CUDA_VISIBLE_DEVICES if set, otherwise default to GPU 0
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    export CUDA_VISIBLE_DEVICES=0
+    echo "[INFO] Using default GPU 0"
+else
+    echo "[INFO] Using pre-configured GPU $CUDA_VISIBLE_DEVICES"
+fi
 
 # 1. Capture Arguments from Slurm
 MODE="${1}"
@@ -72,6 +78,7 @@ docker run --rm \
     -e XDG_CACHE_HOME="/workspace/data/results/cache" \
     -e HF_HOME="/workspace/data/results/cache/huggingface" \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
+    -e DATA_FILE_OVERRIDE="${DATA_FILE_OVERRIDE:-}" \
     -e TORCHINDUCTOR_CACHE_DIR="/workspace/data/results/cache/torch_inductor" \
     -e TRITON_CACHE_DIR="/workspace/data/results/cache/triton" \
     -e TORCH_HOME="/workspace/data/results/cache/torch" \

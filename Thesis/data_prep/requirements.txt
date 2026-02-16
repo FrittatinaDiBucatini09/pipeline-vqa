@@ -1,0 +1,13 @@
+# Data management and analysis
+pandas
+numpy
+
+# Interaction with Hugging Face Hub and datasets
+huggingface_hub
+datasets
+
+# Downloads and HTTP requests
+requests
+
+# Progress bars for loops
+tqdm

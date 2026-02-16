@@ -138,17 +138,43 @@ docker run \
 
 *Note:* You might need to update `src/generate_vqa.py` to allow reading from root (`allowed_media_path = "/"`).
 
+### Preprocessing Integration (Bridge Mode)
+
+When the orchestrator detects a preprocessing stage followed by VQA generation, it automatically:
+
+1. **Verifies** the existence of `vqa_manifest.csv` in the preprocessing output directory
+2. **Sets** `DATA_FILE_OVERRIDE` to point to the manifest
+3. **Sets** `VQA_IMAGE_PATH` to the preprocessing output directory
+4. **Mounts** the preprocessing output as `/preprocessed_images:ro` in the Docker container
+
+This enables seamless consumption of preprocessed images (bounding boxes, attention maps, or segmentation masks) without manual configuration.
+
+**Example:** Running `bbox_preproc → vqa_gen` in the orchestrator automatically uses the bounding box images instead of the original dataset images.
+
 -----
 
 ## ⚙️ Configuration & Parameters
 
 The core logic resides in `src/generate_vqa.py`. Below is a detailed explanation of the arguments you can modify in `submit_generation.sh` or pass directly to the python script.
 
+### Supported Models
+
+The pipeline supports various multimodal medical VQA models:
+
+| Model | Config File | TRUST_REMOTE_CODE | Notes |
+| :--- | :--- | :--- | :--- |
+| `google/medgemma-4b-it` | (default) | Required | MedGemma 4B IT (original) |
+| `google/medgemma-1.5-4b-it` | `medgemma_1_5.conf` | Required | MedGemma 1.5 4B IT (latest) |
+| `Qwen/Qwen2-VL-7B-Instruct` | Custom config | Not required | General-purpose vision-language model |
+
+**Note:** Models requiring `TRUST_REMOTE_CODE=true` execute custom code during model loading. Only use with official, trusted model sources.
+
 ### Model & Data Arguments
 
 | Argument | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--model_name` | `str` | `google/medgemma-4b-it` | The HuggingFace Hub path or local path to the multimodal model. |
+| `--trust_remote_code` | `bool` | `False` | Allow execution of remote code (required for models like MedGemma). |
 | `--dataset_name` | `str` | `flaviagiammarino/vqa-rad` | The path to the VQA dataset (HuggingFace ID). |
 | `--dataset_split` | `str` | `test` | The dataset split to use for inference (e.g., `train`, `test`, `validation`). |
 | `--image_folder` | `str` | `images/` | Directory where images are stored (if loading locally). |

@@ -39,6 +39,11 @@ MIN_P=0.0
 MAX_SAMPLES=""                          # Empty = evaluate all samples
 
 # ==============================================================================
+# SECURITY
+# ==============================================================================
+TRUST_REMOTE_CODE=false                 # Only enable for authorized models (e.g., MedGemma)
+
+# ==============================================================================
 # DEBUG
 # ==============================================================================
 VERBOSE=false
@@ -141,6 +146,10 @@ fi
 
 if [ "$VERBOSE" = true ]; then
     CMD="$CMD --verbose"
+fi
+
+if [ "$TRUST_REMOTE_CODE" = true ]; then
+    CMD="$CMD --trust_remote_code"
 fi
 
 

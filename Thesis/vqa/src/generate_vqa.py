@@ -805,6 +805,8 @@ def main():
     # Model arguments
     parser.add_argument('--model_name', type=str, required=True,
                        help='Model name for vLLM (e.g., Qwen/Qwen2-VL-7B-Instruct)')
+    parser.add_argument('--trust_remote_code', action='store_true',
+                       help='Allow execution of remote code (required for some models like MedGemma)')
 
     # Output arguments
     parser.add_argument('--output_dir', type=str, default='results/vqa_results',
@@ -825,6 +827,8 @@ def main():
                        help='Top-p (nucleus) sampling parameter (1.0 = disabled)')
     parser.add_argument('--min_p', type=float, default=0.0,
                        help='Min-p sampling parameter (0.0 = disabled)')
+    parser.add_argument('--gpu_memory_utilization', type=float, default=0.6,
+                       help='Fraction of GPU memory for vLLM (0.0-1.0, default: 0.6)')
     parser.add_argument('--max_samples', type=int, default=None,
                        help='Maximum number of samples to evaluate (for testing)')
 
@@ -871,6 +875,7 @@ def main():
     print(f"Top-K: {args.top_k}")
     print(f"Top-P: {args.top_p}")
     print(f"Min-P: {args.min_p}")
+    print(f"GPU Memory Utilization: {args.gpu_memory_utilization}")
     print(f"Max Samples: {args.max_samples if args.max_samples else 'No limit'}")
     print(f"Use Chain-of-Thought: {'Enabled' if args.use_cot else 'Disabled'}")
     print(f"Enable Thinking Mode: {'Enabled' if args.enable_thinking else 'Disabled'}")
@@ -894,15 +899,15 @@ def main():
     model_init_kwargs = {
         "model": args.model_name,
         "max_model_len": 8192,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
+        "trust_remote_code": args.trust_remote_code,
     }
 
     # Set up allowed local media paths for image loading
     if args.use_images:
-        # Use the current working directory as the allowed path
-        # allowed_media_path = os.path.abspath(".") # This allows vLLM to access all subdirectories under it
-        
-        # For maximum flexibility, we can allow access to the entire filesystem, but this should be done with caution in a secure environment
-        allowed_media_path = os.path.abspath("/")  # Allow access to entire filesystem (use with caution)
+        # Restrict vLLM file access to the base image path (dataset root or working dir)
+        # This is safer than allowing "/" while still covering all image locations
+        allowed_media_path = os.path.abspath(BASE_IMAGE_PATH)
 
         # Add allowed paths to model kwargs
         # vLLM only accepts a single path, not multiple paths
@@ -910,163 +915,176 @@ def main():
         model_init_kwargs["limit_mm_per_prompt"] = {"image": 10}
 
         print(f"Allowed local media path: {allowed_media_path}")
-        print(f"  - This allows access to all subdirectories including {args.images_dir}")
 
-    model = LLM(**model_init_kwargs)
+    model = None
+    try:
+        model = LLM(**model_init_kwargs)
 
-    # Set up sampling parameters
-    sampling_params = SamplingParams(
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        min_p=args.min_p,
-        stop=["\n\n"] if not args.use_cot else ["**STEP 5:"]
-    )
+        # Set up sampling parameters
+        sampling_params = SamplingParams(
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            min_p=args.min_p,
+            stop=["\n\n"] if not args.use_cot else ["**STEP 5:"]
+        )
 
-    # Load VQA dataset
-    df = load_vqa_dataset(
-        dataset_name=args.dataset_name,
-        split=args.split,
-        data_file=args.data_file,
-        max_samples=args.max_samples
-    )
+        # Load VQA dataset
+        df = load_vqa_dataset(
+            dataset_name=args.dataset_name,
+            split=args.split,
+            data_file=args.data_file,
+            max_samples=args.max_samples
+        )
 
-    # Validate dataset has required columns
-    if args.dataset_name:
-        # For HuggingFace datasets, validate column names
-        sample_keys = df.columns.tolist()
-        print(f"Dataset columns: {sample_keys}")
+        # Validate dataset has required columns
+        if args.dataset_name:
+            # For HuggingFace datasets, validate column names
+            sample_keys = df.columns.tolist()
+            print(f"Dataset columns: {sample_keys}")
 
-        missing_cols = []
-        if args.image_column not in sample_keys:
-            missing_cols.append(args.image_column)
-        if args.question_column not in sample_keys:
-            missing_cols.append(args.question_column)
-        if args.answer_column not in sample_keys:
-            missing_cols.append(args.answer_column)
+            missing_cols = []
+            if args.image_column not in sample_keys:
+                missing_cols.append(args.image_column)
+            if args.question_column not in sample_keys:
+                missing_cols.append(args.question_column)
+            if args.answer_column not in sample_keys:
+                missing_cols.append(args.answer_column)
 
-        if missing_cols:
-            raise ValueError(f"Missing required columns: {missing_cols}")
+            if missing_cols:
+                raise ValueError(f"Missing required columns: {missing_cols}")
 
-        print("Dataset validation passed.")
+            print("Dataset validation passed.")
 
-    # Load few-shot source data if specified (best practice: avoid data leakage)
-    few_shot_df = None
-    if args.use_few_shot and args.few_shot_source:
-        print(f"\nLoading few-shot examples from: {args.few_shot_source}")
-        # Check if it's a HuggingFace dataset or local file
-        if args.few_shot_source.endswith('.json'):
-            few_shot_df = load_vqa_dataset(data_file=args.few_shot_source)
-        else:
-            few_shot_df = load_vqa_dataset(dataset_name=args.few_shot_source, split=args.split)
-        print(f"Loaded {len(few_shot_df)} samples for few-shot examples")
+        # Load few-shot source data if specified (best practice: avoid data leakage)
+        few_shot_df = None
+        if args.use_few_shot and args.few_shot_source:
+            print(f"\nLoading few-shot examples from: {args.few_shot_source}")
+            # Check if it's a HuggingFace dataset or local file
+            if args.few_shot_source.endswith('.json'):
+                few_shot_df = load_vqa_dataset(data_file=args.few_shot_source)
+            else:
+                few_shot_df = load_vqa_dataset(dataset_name=args.few_shot_source, split=args.split)
+            print(f"Loaded {len(few_shot_df)} samples for few-shot examples")
 
-    # Store actual number of samples used
-    num_samples_used = len(df)
+        # Store actual number of samples used
+        num_samples_used = len(df)
 
-    # Determine if we need to save images (HuggingFace datasets require this)
-    images_save_dir = args.images_dir if args.dataset_name and args.use_images else None
+        # Determine if we need to save images (HuggingFace datasets require this)
+        images_save_dir = args.images_dir if args.dataset_name and args.use_images else None
 
-    # Prepare chat conversations
-    conversations = prepare_chat_conversations(
-        df,
-        use_cot=args.use_cot,
-        use_images=args.use_images,
-        use_few_shot=args.use_few_shot,
-        num_few_shot=args.num_few_shot,
-        few_shot_seed=args.few_shot_seed,
-        test_df=few_shot_df,
-        image_column=args.image_column,
-        question_column=args.question_column,
-        images_dir=images_save_dir
-    )
+        # Prepare chat conversations
+        conversations = prepare_chat_conversations(
+            df,
+            use_cot=args.use_cot,
+            use_images=args.use_images,
+            use_few_shot=args.use_few_shot,
+            num_few_shot=args.num_few_shot,
+            few_shot_seed=args.few_shot_seed,
+            test_df=few_shot_df,
+            image_column=args.image_column,
+            question_column=args.question_column,
+            images_dir=images_save_dir
+        )
 
-    # Print sample conversations for quality inspection
-    print_sample_conversations(conversations, num_samples=2 if args.use_cot else 3)
+        # Print sample conversations for quality inspection
+        print_sample_conversations(conversations, num_samples=2 if args.use_cot else 3)
 
-    # Run chat inference
-    responses = run_chat_inference(model, conversations, sampling_params, args.batch_size, args.enable_thinking)
+        # Run chat inference
+        responses = run_chat_inference(model, conversations, sampling_params, args.batch_size, args.enable_thinking)
 
-    # Parse predictions and gold standard answers
-    # Enable verbose parsing for first few samples to verify CoT parsing
-    predicted_answers = []
-    for i, response in enumerate(responses):
-        verbose = (i < 3)  # Show parsing details for first 3 samples
-        parsed = parse_answer(response, use_cot=args.use_cot, verbose=verbose)
-        predicted_answers.append(parsed)
+        # Parse predictions and gold standard answers
+        # Enable verbose parsing for first few samples to verify CoT parsing
+        predicted_answers = []
+        for i, response in enumerate(responses):
+            verbose = (i < 3)  # Show parsing details for first 3 samples
+            parsed = parse_answer(response, use_cot=args.use_cot, verbose=verbose)
+            predicted_answers.append(parsed)
 
-        if verbose and args.use_cot:
-            print(f"\n[Sample {i}] CoT Response Parsing:")
-            print(f"  Raw response length: {len(response)} chars")
-            print(f"  Parsed answer: '{parsed}'")
+            if verbose and args.use_cot:
+                print(f"\n[Sample {i}] CoT Response Parsing:")
+                print(f"  Raw response length: {len(response)} chars")
+                print(f"  Parsed answer: '{parsed}'")
 
-    gold_answers = [parse_gold_answer(row[args.answer_column]) for _, row in df.iterrows()]
+        gold_answers = [parse_gold_answer(row[args.answer_column]) for _, row in df.iterrows()]
 
-    # Verify parsing quality for CoT
-    if args.use_cot:
-        print(f"\n{'='*60}")
-        print("CoT PARSING QUALITY CHECK")
-        print(f"{'='*60}")
-        avg_answer_length = np.mean([len(ans) for ans in predicted_answers])
-        avg_response_length = np.mean([len(resp) for resp in responses])
-        print(f"Average raw response length: {avg_response_length:.1f} chars")
-        print(f"Average parsed answer length: {avg_answer_length:.1f} chars")
-        print(f"Compression ratio: {(avg_answer_length/avg_response_length)*100:.1f}%")
-        print(f"{'='*60}\n")
+        # Verify parsing quality for CoT
+        if args.use_cot:
+            print(f"\n{'='*60}")
+            print("CoT PARSING QUALITY CHECK")
+            print(f"{'='*60}")
+            avg_answer_length = np.mean([len(ans) for ans in predicted_answers])
+            avg_response_length = np.mean([len(resp) for resp in responses])
+            print(f"Average raw response length: {avg_response_length:.1f} chars")
+            print(f"Average parsed answer length: {avg_answer_length:.1f} chars")
+            print(f"Compression ratio: {(avg_answer_length/avg_response_length)*100:.1f}%")
+            print(f"{'='*60}\n")
 
-    # Calculate metrics
-    results = calculate_metrics(gold_answers, predicted_answers)
+        # Calculate metrics
+        results = calculate_metrics(gold_answers, predicted_answers)
 
-    # Print results
-    print_metrics(results, "VQA")
+        # Print results
+        print_metrics(results, "VQA")
 
-    # Prepare detailed predictions for saving
-    detailed_predictions = []
-    for i, (_, row) in enumerate(df.iterrows()):
-        # Get image reference (local file or saved file)
-        if images_save_dir:
-            image_ref = os.path.join(images_save_dir, f"{i:06d}.png")
-        else:
-            image_ref = row[args.image_column] if isinstance(row[args.image_column], str) else f"sample_{i}"
+        # Prepare detailed predictions for saving
+        detailed_predictions = []
+        for i, (_, row) in enumerate(df.iterrows()):
+            # Get image reference (local file or saved file)
+            if images_save_dir:
+                image_ref = os.path.join(images_save_dir, f"{i:06d}.png")
+            else:
+                image_ref = row[args.image_column] if isinstance(row[args.image_column], str) else f"sample_{i}"
 
-        # Calculate individual metrics for this sample
-        correct = gold_answers[i].lower().strip() == predicted_answers[i].lower().strip()
+            # Calculate individual metrics for this sample
+            correct = gold_answers[i].lower().strip() == predicted_answers[i].lower().strip()
 
-        detailed_predictions.append({
-            'image_file': image_ref,
-            'question': row[args.question_column],
-            'reference_answer': gold_answers[i],
-            'predicted_answer': predicted_answers[i],
-            'raw_response': responses[i] if not args.use_cot else responses[i][:200] + "..." if len(responses[i]) > 200 else responses[i],  # Truncate CoT for space
-            'full_response': responses[i],  # Keep full response for CoT analysis
-            'correct': correct,
-            'use_cot': args.use_cot,
-            'use_images': args.use_images,
-            'use_few_shot': args.use_few_shot,
-            'num_few_shot': args.num_few_shot if args.use_few_shot else 0,
-            'answer_length': len(predicted_answers[i]),
-            'response_length': len(responses[i])
-        })
+            detailed_predictions.append({
+                'image_file': image_ref,
+                'question': row[args.question_column],
+                'reference_answer': gold_answers[i],
+                'predicted_answer': predicted_answers[i],
+                'raw_response': responses[i] if not args.use_cot else responses[i][:200] + "..." if len(responses[i]) > 200 else responses[i],  # Truncate CoT for space
+                'full_response': responses[i],  # Keep full response for CoT analysis
+                'correct': correct,
+                'use_cot': args.use_cot,
+                'use_images': args.use_images,
+                'use_few_shot': args.use_few_shot,
+                'num_few_shot': args.num_few_shot if args.use_few_shot else 0,
+                'answer_length': len(predicted_answers[i]),
+                'response_length': len(responses[i])
+            })
 
-    # Create model name suffix
-    model_name_suffix = f"{args.model_name}"
-    if args.use_cot:
-        model_name_suffix += "_cot"
-    if args.use_images:
-        model_name_suffix += "_multimodal"
-    if args.use_few_shot:
-        model_name_suffix += f"_fewshot{args.num_few_shot}"
+        # Create model name suffix
+        model_name_suffix = f"{args.model_name}"
+        if args.use_cot:
+            model_name_suffix += "_cot"
+        if args.use_images:
+            model_name_suffix += "_multimodal"
+        if args.use_few_shot:
+            model_name_suffix += f"_fewshot{args.num_few_shot}"
 
-    # Save results with model name and sample count
-    save_results(results, detailed_predictions, args.output_dir, "vqa", model_name_suffix, num_samples_used)
+        # Save results with model name and sample count
+        save_results(results, detailed_predictions, args.output_dir, "vqa", model_name_suffix, num_samples_used)
 
-    # Save model statistics to CSV
-    save_model_stats_to_csv(results, args, "vqa", num_samples_used, args.output_dir)
+        # Save model statistics to CSV
+        save_model_stats_to_csv(results, args, "vqa", num_samples_used, args.output_dir)
 
-    # Save generations if requested
-    if args.save_generations:
-        save_generations(detailed_predictions, args.output_dir, model_name_suffix, num_samples_used)
+        # Save generations if requested
+        if args.save_generations:
+            save_generations(detailed_predictions, args.output_dir, model_name_suffix, num_samples_used)
+
+    finally:
+        # Graceful GPU cleanup to prevent zombie processes on the cluster
+        import gc
+        del model
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
 if __name__ == "__main__":
     main()

@@ -155,8 +155,33 @@ sbatch --export=ALL,LIMIT=5 submit_segmentation.sh
 
 ## 📂 Outputs
 
--   **`results/step1_bboxes/`** — `predictions.jsonl`, `report.txt`
--   **`results/step2_masks/`** — `masks/*.png` (binary), `overlays/*.png` (visualization)
+### Step 1 (Localization)
+
+-   **`results/step1_bboxes/`**
+    - `predictions.jsonl` — Bounding box coordinates and metadata
+    - `report.txt` — Processing summary
+
+### Step 2 (Segmentation)
+
+-   **`results/step2_masks/`**
+    - `masks/*.png` — Binary segmentation masks
+    - `overlays/*.png` — Visualization overlays (colored masks on original image)
+    - `vqa_manifest.csv` — VQA-ready manifest (when `--save_overlays` is enabled)
+
+### VQA Integration
+
+When overlay saving is enabled, the pipeline generates a `vqa_manifest.csv` file:
+
+```csv
+image_path,question,answer
+overlays/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_q1_overlay.png,What is the position of the ET tube as seen in the CXR?,C
+overlays/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_q2_overlay.png,What could be inferred from the NG tube's positioning as noted in the CXR?,NG tube tip is in the stomach.
+```
+
+**Benefits:**
+- **Orchestrator Compatible:** Automatically detected when chaining `segmentation → vqa_gen`
+- **Overlay-Only:** Only includes images that have visualization overlays (not raw masks)
+- **Question Tracking:** File names include question index for multi-region tracking
 
 ---
 

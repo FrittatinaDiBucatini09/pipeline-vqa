@@ -1,34 +1,201 @@
-# Environment & secrets
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+
+# C extensions
+**/*.so
+
+# Distribution / packaging
+.Python
+**/develop-eggs/
+**/dist/
+**/downloads/
+**/eggs/
+**/.eggs/
+**/lib/
+**/lib64/
+**/parts/
+**/sdist/
+**/var/
+**/wheels/
+**/share/python-wheels/
+**/*.egg-info/
+.installed.cfg
+**/*.egg
+MANIFEST
+
+# PyInstaller
+**/*.manifest
+**/*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+**/htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+**/*.cover
+**/*.py,cover
+.hypothesis/
+.pytest_cache/
+**/cover/
+
+# Translations
+**/*.mo
+**/*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+#Pipfile.lock
+
+# UV
+#uv.lock
+
+# poetry
+#poetry.lock
+
+# pdm
+#pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
-*.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-venv*/
+venv_prep/
+**/venv_prep/
 
-# HuggingFace / model caches
-hf_cache/
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# SLURM logs
-slurm-*.out
-slurm_*.out
-slurm_*.err
+# Rope project settings
+.ropeproject
 
-# Docker build artifacts
-*.tar
+# mkdocs documentation
+/site
 
-# OS
-.DS_Store
-Thumbs.db
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# IDE
-.vscode/
+# Pyre type checker
+.pyre/
+
+# pytype static type checker
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
 .idea/
 
-# CSV data files (large, track separately)
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# results and data
+**/results/
+**/data/
+risultati_vqa.json
+
+# File DS_Store
+**/.DS_Store
+
+*.err
+*.out
+
+# images, caches, checkpoints, and other heavy artifacts
+**/images/
+**/hf_cache/
+**/preprocessed_images/
+**/processed_images/
+**/checkpoints/
+**/data/
+
 *.csv
+*.json
+*.jsonl
+
+# Gemini, Cluster Infrastructure, and Claude documentation files
+gemini.md
+GEMINI.md
+Gemini.md
+
+cluster_infrastructure.md
+CLUSTER_INFRASTRUCTURE.md
+Cluster_Infrastructure.md
+
+claude.md
+CLAUDE.md
+Claude.md
 
 # Refactoring script (one-time use)
 refactor_repo.sh
+
+# Orchestrator
+.orchestrator_env/
+orchestrator_runs/
+
+# prompts
+prompt.md
+prompt*.md
+prompts.md

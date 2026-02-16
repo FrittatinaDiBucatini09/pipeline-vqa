@@ -431,11 +431,17 @@ def main():
     parser.add_argument('--min_p', type=float, default=0.0,
                        help='Min-p sampling parameter (0.0 = disabled)')
 
+    # GPU memory
+    parser.add_argument('--gpu_memory_utilization', type=float, default=0.6,
+                       help='Fraction of GPU memory for vLLM (0.0-1.0)')
+
     # Processing arguments
     parser.add_argument('--max_samples', type=int, default=None,
                        help='Maximum number of samples to evaluate (for testing)')
     parser.add_argument('--verbose', action='store_true',
                        help='Enable verbose output for debugging')
+    parser.add_argument('--trust_remote_code', action='store_true',
+                       help='Allow execution of remote code (only enable for authorized models)')
 
     args = parser.parse_args()
 
@@ -494,114 +500,131 @@ def main():
 
     # Initialize judge model
     print(f"\nLoading judge model: {args.judge_model}")
+    judge_model = None
     try:
-        judge_model = LLM(
-            model=args.judge_model,
-            max_model_len=8192
+        try:
+            judge_model = LLM(
+                model=args.judge_model,
+                max_model_len=8192,
+                dtype="auto",
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                trust_remote_code=args.trust_remote_code
+            )
+            print(f"✅ Model loaded successfully")
+        except Exception as e:
+            print(f"\n❌ Failed to load judge model: {e}")
+            print(f"   Make sure HF_HOME is set correctly and the model exists in the cache.")
+            print(f"   Current HF_HOME: {os.getenv('HF_HOME', 'not set')}")
+            import sys
+            sys.exit(1)
+
+        # Set up sampling parameters
+        sampling_params = SamplingParams(
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            min_p=args.min_p
         )
-        print(f"✅ Model loaded successfully")
-    except Exception as e:
-        print(f"\n❌ Failed to load judge model: {e}")
-        print(f"   Make sure HF_HOME is set correctly and the model exists in the cache.")
-        print(f"   Current HF_HOME: {os.getenv('HF_HOME', 'not set')}")
-        import sys
-        sys.exit(1)
 
-    # Set up sampling parameters
-    sampling_params = SamplingParams(
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        min_p=args.min_p
-    )
+        # Prepare judge prompts
+        print("\nPreparing judge prompts...")
+        judge_prompts = prepare_judge_prompts(generations, use_cot=args.judge_use_cot)
 
-    # Prepare judge prompts
-    print("\nPreparing judge prompts...")
-    judge_prompts = prepare_judge_prompts(generations, use_cot=args.judge_use_cot)
+        # Print sample prompt
+        if args.verbose:
+            print(f"\n{'='*70}")
+            print("SAMPLE JUDGE PROMPT:")
+            print(f"{'='*70}")
+            print(judge_prompts[0])
+            print(f"{'='*70}\n")
 
-    # Print sample prompt
-    if args.verbose:
-        print(f"\n{'='*70}")
-        print("SAMPLE JUDGE PROMPT:")
-        print(f"{'='*70}")
-        print(judge_prompts[0])
-        print(f"{'='*70}\n")
+        # Run judge inference
+        judge_responses = run_judge_inference(judge_model, judge_prompts, sampling_params, args.batch_size)
 
-    # Run judge inference
-    judge_responses = run_judge_inference(judge_model, judge_prompts, sampling_params, args.batch_size)
+        # Validate response count
+        if len(judge_responses) != len(judge_prompts):
+            print(f"\n❌ ERROR: Judge returned {len(judge_responses)} responses but expected {len(judge_prompts)}")
+            print(f"   vLLM inference may have failed mid-batch. Check GPU memory and model configuration.")
+            import sys
+            sys.exit(1)
 
-    # Validate response count
-    if len(judge_responses) != len(judge_prompts):
-        print(f"\n❌ ERROR: Judge returned {len(judge_responses)} responses but expected {len(judge_prompts)}")
-        print(f"   vLLM inference may have failed mid-batch. Check GPU memory and model configuration.")
-        import sys
-        sys.exit(1)
+        # Parse judge responses
+        print("\nParsing judge responses...")
+        judge_results = []
+        for i, (gen, response) in enumerate(zip(generations, judge_responses)):
+            verbose = args.verbose and (i < 3)  # Show details for first 3 if verbose
+            parsed = parse_judge_response(response, verbose=verbose)
 
-    # Parse judge responses
-    print("\nParsing judge responses...")
-    judge_results = []
-    for i, (gen, response) in enumerate(zip(generations, judge_responses)):
-        verbose = args.verbose and (i < 3)  # Show details for first 3 if verbose
-        parsed = parse_judge_response(response, verbose=verbose)
+            # Add original data to result
+            result = {
+                'question': gen.get('question', 'N/A'),
+                'reference_answer': gen.get('reference_answer', 'N/A'),
+                'predicted_answer': gen.get('predicted_answer', 'N/A'),
+                'image_file': gen.get('image_file', 'N/A'),
+                'exact_match': exact_match_results[i],
+                **parsed
+            }
+            judge_results.append(result)
 
-        # Add original data to result
-        result = {
-            'question': gen.get('question', 'N/A'),
-            'reference_answer': gen.get('reference_answer', 'N/A'),
-            'predicted_answer': gen.get('predicted_answer', 'N/A'),
-            'image_file': gen.get('image_file', 'N/A'),
-            'exact_match': exact_match_results[i],
-            **parsed
-        }
-        judge_results.append(result)
+        # Calculate metrics
+        print("\nCalculating metrics...")
+        metrics = calculate_judge_metrics(judge_results, exact_match_results)
 
-    # Calculate metrics
-    print("\nCalculating metrics...")
-    metrics = calculate_judge_metrics(judge_results, exact_match_results)
+        # Print results
+        print_judge_metrics(metrics)
 
-    # Print results
-    print_judge_metrics(metrics)
+        # Save results
+        os.makedirs(args.output_dir, exist_ok=True)
 
-    # Save results
-    os.makedirs(args.output_dir, exist_ok=True)
+        # Create output filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        judge_model_clean = args.judge_model.replace('/', '_').replace('\\', '_')
+        output_file = os.path.join(
+            args.output_dir,
+            f"judge_results_{judge_model_clean}_{len(generations)}samples_{timestamp}.json"
+        )
 
-    # Create output filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    judge_model_clean = args.judge_model.replace('/', '_').replace('\\', '_')
-    output_file = os.path.join(
-        args.output_dir,
-        f"judge_results_{judge_model_clean}_{len(generations)}samples_{timestamp}.json"
-    )
+        save_judge_results(judge_results, metrics, output_file)
 
-    save_judge_results(judge_results, metrics, output_file)
+        # Save stats to CSV
+        save_judge_stats_to_csv(metrics, args, args.output_dir, original_model_name)
 
-    # Save stats to CSV
-    save_judge_stats_to_csv(metrics, args, args.output_dir, original_model_name)
+        # Print summary of disagreements (judge correct but exact match wrong)
+        if metrics['judge_correct_exact_wrong'] > 0 and args.verbose:
+            print(f"\n{'='*70}")
+            print(f"EXAMPLES WHERE JUDGE FOUND CORRECT BUT EXACT MATCH FAILED:")
+            print(f"(Potential valid paraphrases)")
+            print(f"{'='*70}")
 
-    # Print summary of disagreements (judge correct but exact match wrong)
-    if metrics['judge_correct_exact_wrong'] > 0 and args.verbose:
-        print(f"\n{'='*70}")
-        print(f"EXAMPLES WHERE JUDGE FOUND CORRECT BUT EXACT MATCH FAILED:")
-        print(f"(Potential valid paraphrases)")
-        print(f"{'='*70}")
+            disagreement_examples = [
+                r for r in judge_results
+                if r['verdict'] == 'CORRECT' and not r['exact_match']
+            ]
 
-        disagreement_examples = [
-            r for r in judge_results
-            if r['verdict'] == 'CORRECT' and not r['exact_match']
-        ]
+            for i, ex in enumerate(disagreement_examples[:5], 1):  # Show first 5
+                print(f"\n[Example {i}]")
+                print(f"Question: {ex['question']}")
+                print(f"Reference: {ex['reference_answer']}")
+                print(f"Predicted: {ex['predicted_answer']}")
+                print(f"Confidence: {ex['confidence']}")
+                print(f"Explanation: {ex['explanation']}")
 
-        for i, ex in enumerate(disagreement_examples[:5], 1):  # Show first 5
-            print(f"\n[Example {i}]")
-            print(f"Question: {ex['question']}")
-            print(f"Reference: {ex['reference_answer']}")
-            print(f"Predicted: {ex['predicted_answer']}")
-            print(f"Confidence: {ex['confidence']}")
-            print(f"Explanation: {ex['explanation']}")
+            if len(disagreement_examples) > 5:
+                print(f"\n... and {len(disagreement_examples) - 5} more")
+            print(f"{'='*70}")
 
-        if len(disagreement_examples) > 5:
-            print(f"\n... and {len(disagreement_examples) - 5} more")
-        print(f"{'='*70}")
+    finally:
+        # Graceful GPU cleanup to prevent zombie processes on the cluster
+        import gc
+        del judge_model
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
 
 if __name__ == "__main__":

@@ -449,6 +449,62 @@ class BiomedCLIPInferencePipeline:
 def load_dataframe(path: str) -> pd.DataFrame:
     return pd.read_parquet(path) if path.endswith('.parquet') else pd.read_csv(path)
 
+
+def generate_vqa_manifest(output_root: Path, question_col: str = 'question',
+                          answer_col: str = 'answer') -> None:
+    """
+    Reads predictions.jsonl and generates a VQA-ready CSV manifest.
+
+    Each JSONL record already contains the full original CSV row data,
+    plus the new image_path pointing to the generated image. This function
+    extracts the columns needed by the VQA generation script.
+
+    One row per generated image (handles multi-image per original question).
+
+    Args:
+        output_root: Path to the preprocessing output directory.
+        question_col: Name of the question column in the original data.
+        answer_col: Name of the answer column in the original data.
+    """
+    jsonl_path = output_root / "predictions.jsonl"
+    manifest_path = output_root / "vqa_manifest.csv"
+
+    if not jsonl_path.exists():
+        print(f"[WARNING] predictions.jsonl not found at {jsonl_path}. Skipping manifest generation.")
+        return
+
+    records = []
+    with open(jsonl_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            image_path = entry.get('image_path', '')
+            question = entry.get(question_col, '')
+            answer = entry.get(answer_col, '')
+
+            if not image_path:
+                continue
+
+            records.append({
+                'image_path': image_path,
+                'question': question,
+                'answer': answer,
+            })
+
+    if not records:
+        print("[WARNING] No valid records found in predictions.jsonl. VQA manifest is empty.")
+        return
+
+    df = pd.DataFrame(records)
+    df.to_csv(manifest_path, index=False)
+    print(f"[INFO] VQA manifest generated: {manifest_path} ({len(df)} rows)")
+
 def save_result_async(save_path, img, boxes, mode, prompt=None, draw_label=False, inference_color=(0, 0, 255)):
     """
     Handles both standard mode (list of boxes) and composite mode (list of box+label tuples).
@@ -1375,6 +1431,13 @@ def main():
     print(f"\n[SUCCESS] Processing complete.")
     print(f"[REPORT]  Saved to: {report_path}")
     print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+
+    # Generate VQA-ready manifest for downstream pipeline stages
+    generate_vqa_manifest(
+        output_root,
+        question_col=args.text_col,
+        answer_col='answer',
+    )
 
 if __name__ == "__main__":
     # 'spawn' is required for CUDA compatibility in multiprocessing

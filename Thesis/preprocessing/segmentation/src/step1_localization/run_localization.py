@@ -1347,9 +1347,12 @@ def main():
 
     finally:
         # Graceful Shutdown of Thread/Process Pools
-        io_executor.shutdown(wait=True)
-        crf_executor.shutdown(wait=True)
-        wandb.finish()
+        try:
+            io_executor.shutdown(wait=True)
+            crf_executor.shutdown(wait=True)
+            wandb.finish()
+        except Exception as e:
+            print(f"[WARNING] Shutdown cleanup error (non-critical): {e}")
 
     # --- Final Reporting ---
     total_time = time.time() - start_time

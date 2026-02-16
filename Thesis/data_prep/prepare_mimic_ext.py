@@ -1,15 +1,30 @@
 import json
 import csv
 import os
+import argparse
 from pathlib import Path
 from tqdm import tqdm
 
-# --- CONFIGURATION ---
-MIMIC_EXT_DATASET_DIR = Path("/datasets/MIMIC-Ext-MIMIC-CXR-VQA/dataset")
-OUTPUT_CSV = "../mimic_ext_mapped.csv"
-MAX_SAMPLES = 50000 
+# --- CONFIGURATION DEFAULTS ---
+DEFAULT_MIMIC_EXT_DATASET_DIR = "/datasets/MIMIC-Ext-MIMIC-CXR-VQA/dataset"
+DEFAULT_OUTPUT_CSV = "../mimic_ext_mapped.csv"
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='MIMIC-Ext-MIMIC-CXR-VQA Preparation Utility')
+    parser.add_argument('--dataset_dir', type=str, default=DEFAULT_MIMIC_EXT_DATASET_DIR,
+                       help='Root directory of MIMIC-Ext dataset')
+    parser.add_argument('--output_csv', type=str, default=DEFAULT_OUTPUT_CSV,
+                       help='Output CSV file path')
+    parser.add_argument('--max_samples', type=int, default=50000,
+                       help='Maximum number of samples to process')
+    return parser.parse_args()
 
 def main():
+    args = parse_args()
+    MIMIC_EXT_DATASET_DIR = Path(args.dataset_dir)
+    OUTPUT_CSV = args.output_csv
+    MAX_SAMPLES = args.max_samples
+
     target_file = MIMIC_EXT_DATASET_DIR / "train.json"
     if not target_file.exists():
         print(f"[ERROR] File not found: {target_file}")

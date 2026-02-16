@@ -47,6 +47,7 @@ TEMPERATURE=0.0                          # Sampling temperature (0.0 = greedy)
 TOP_K=-1                                 # Top-k sampling (-1 = disabled)
 TOP_P=1.0                                # Top-p sampling (1.0 = disabled)
 MIN_P=0.0                                # Min-p sampling (0.0 = disabled)
+GPU_MEMORY_UTILIZATION=0.6               # Fraction of GPU memory for vLLM (0.0-1.0)
 
 # ============================================================================
 # PROMPTING STRATEGY
@@ -66,6 +67,7 @@ FEW_SHOT_SEED=42                         # Random seed for few-shot sampling
 # OUTPUT CONTROL
 # ============================================================================
 SAVE_GENERATIONS=true                   # Save model generations to file
+TRUST_REMOTE_CODE=false                 # Trust remote code (for custom models)
 
 
 
@@ -116,6 +118,13 @@ if [ -n "$TARGET_CONFIG" ]; then
     fi
 fi
 
+# OVERRIDE: Allow Orchestrator to force a dataset
+if [ -n "$DATA_FILE_OVERRIDE" ]; then
+    echo "🔵 [OVERRIDE] Forcing Dataset: $DATA_FILE_OVERRIDE"
+    DATA_FILE="$DATA_FILE_OVERRIDE"
+    DATASET_NAME="" # Disable HF dataset if local file is forced
+fi
+
 # ==============================================================================
 # 3. COMMAND ARGUMENT ASSEMBLY
 # ==============================================================================
@@ -148,6 +157,7 @@ CMD="$CMD --temperature $TEMPERATURE"
 CMD="$CMD --top_k $TOP_K"
 CMD="$CMD --top_p $TOP_P"
 CMD="$CMD --min_p $MIN_P"
+CMD="$CMD --gpu_memory_utilization $GPU_MEMORY_UTILIZATION"
 
 # Add optional parameters
 if [ -n "$MAX_SAMPLES" ]; then
@@ -179,6 +189,11 @@ fi
 
 if [ "$SAVE_GENERATIONS" = true ]; then
     CMD="$CMD --save_generations"
+fi
+
+# Add trust remote code flag
+if [ "$TRUST_REMOTE_CODE" = true ]; then
+    CMD="$CMD --trust_remote_code"
 fi
 
 # ==============================================================================
@@ -223,6 +238,7 @@ echo "  - Temperature: $TEMPERATURE"
 echo "  - Top-K: $TOP_K"
 echo "  - Top-P: $TOP_P"
 echo "  - Min-P: $MIN_P"
+echo "  - GPU Memory Utilization: $GPU_MEMORY_UTILIZATION"
 if [ -n "$MAX_SAMPLES" ]; then
     echo "  - Max Samples: $MAX_SAMPLES"
 fi

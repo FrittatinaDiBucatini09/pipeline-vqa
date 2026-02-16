@@ -20,14 +20,18 @@ PHYS_DIR=$(pwd)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True # Allow PyTorch to expand memory segments as needed
 
 # Smart GPU Selection:
+# - If CUDA_VISIBLE_DEVICES already set → respect it (from test scripts or manual override)
 # - If running under Slurm (SLURM_JOB_ID exists) → use Slurm's GPU allocation
 # - If running interactively (./run_bbox_preprocessing.sh) → default to GPU 0
-if [ -z "$SLURM_JOB_ID" ]; then
-    # Interactive mode — default to GPU 0
+if [ -n "$CUDA_VISIBLE_DEVICES" ]; then
+    # CUDA_VISIBLE_DEVICES already set — respect it
+    echo "[INFO] Using pre-configured GPU $CUDA_VISIBLE_DEVICES"
+elif [ -z "$SLURM_JOB_ID" ]; then
+    # Interactive mode with no GPU specified — default to GPU 0
     export CUDA_VISIBLE_DEVICES=0
-    echo "[INFO] Running in interactive mode → using GPU 0"
+    echo "[INFO] Running in interactive mode → defaulting to GPU 0"
 else
-    # Slurm mode — respect the allocation (CUDA_VISIBLE_DEVICES already set by Slurm)
+    # Slurm mode — respect the allocation (CUDA_VISIBLE_DEVICES set by Slurm)
     echo "[INFO] Running under Slurm → using GPU $CUDA_VISIBLE_DEVICES"
 fi
 
@@ -143,6 +147,12 @@ if [ -n "$CONFIG_FILE" ]; then
     fi
 else
     echo "🟡 [CONFIG] No config file provided. Using script DEFAULTS."
+fi
+
+# OVERRIDE: Allow Orchestrator to force a dataset
+if [ -n "$DATA_FILE_OVERRIDE" ]; then
+    echo "🔵 [OVERRIDE] Forcing Dataset: $DATA_FILE_OVERRIDE"
+    METADATA_FILENAME="$DATA_FILE_OVERRIDE"
 fi
 
 # Resolve OUTPUT_DIR to absolute path (required for Docker mount)

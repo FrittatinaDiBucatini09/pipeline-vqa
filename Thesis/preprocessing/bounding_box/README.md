@@ -220,6 +220,42 @@ These variables are defined in the `.conf` files.
 
 ---
 
+## 📊 Outputs
+
+The pipeline generates the following outputs in the `results/` directory:
+
+### Primary Outputs
+
+| File | Format | Description |
+|------|--------|-------------|
+| `predictions.jsonl` | JSONL | Complete predictions with bounding box coordinates, prompts, and metadata |
+| `vqa_manifest.csv` | CSV | VQA-ready manifest for downstream pipeline integration |
+| `report.txt` | Text | Processing summary with success/failure statistics |
+
+### VQA Manifest Structure
+
+The `vqa_manifest.csv` file enables seamless integration with the VQA generation stage:
+
+```csv
+image_path,question,answer
+files/p10/p10268877/s50042142/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_idx1.jpg,What is the position of the ET tube as seen in the CXR?,C
+files/p10/p10268877/s50042142/4c3c1335-0fce9b11-027c582b-a0ed8d89-ca614d90_idx2.jpg,What could be inferred from the NG tube's positioning as noted in the CXR?,NG tube tip is in the stomach.
+```
+
+**Key Features:**
+- **Relative Paths:** Image paths are relative to the results directory
+- **One Row Per Image:** Multi-region questions create multiple rows (one per bounding box)
+- **Metadata Preservation:** Questions and answers copied exactly from source CSV
+- **Orchestrator Compatible:** Automatically detected when chaining bbox → VQA in orchestrator
+
+### Visual Outputs (Optional)
+
+When `OUTPUT_FORMAT="image"`, the pipeline also generates:
+- Bounding box overlay images (`.jpg`) in `files/` subdirectory
+- Visual debugging images with box overlays
+
+---
+
 ## 📜 Reproducibility
 
 * **Hardware:** NVIDIA RTX 3090 (24GB VRAM).

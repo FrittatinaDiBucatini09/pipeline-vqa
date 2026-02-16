@@ -18,7 +18,13 @@ PHYS_DIR=$(pwd)
 
 # --- GPU & CUDA Settings ---
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=0
+# Respect existing CUDA_VISIBLE_DEVICES if set, otherwise default to GPU 0
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    export CUDA_VISIBLE_DEVICES=0
+    echo "[INFO] Using default GPU 0"
+else
+    echo "[INFO] Using pre-configured GPU $CUDA_VISIBLE_DEVICES"
+fi
 
 # --- Host Path Definitions ---
 OUTPUT_DIR="$PHYS_DIR/results"
@@ -105,6 +111,12 @@ if [ -n "$CONFIG_FILE" ]; then
     fi
 else
     echo "🟡 [CONFIG] No config file provided. Using script DEFAULTS."
+fi
+
+# OVERRIDE: Allow Orchestrator to force a dataset
+if [ -n "$DATA_FILE_OVERRIDE" ]; then
+    echo "🔵 [OVERRIDE] Forcing Dataset: $DATA_FILE_OVERRIDE"
+    METADATA_FILENAME="$DATA_FILE_OVERRIDE"
 fi
 
 # CRITICAL: Enforce the correct Docker Image Name
