@@ -93,10 +93,12 @@ pipeline-vqa/
 * Generates robust attention heatmaps.
 * Localizes regions of interest.
 * Performs zero-shot and fine-tuned segmentation using **SAM / MedSAM3**.
+* **Automatic VQA integration** via manifest generation (`vqa_manifest.csv`).
 
 
 * **Automated Bounding Boxes**: Gridsearch configurations allow tuning of bounding box extraction thresholds, CRF integration, and region exploding/compositing.
-* **Advanced VQA Generation**: Ties extracted image features to text via state-of-the-art vision-language models.
+* **Preprocessing→VQA Bridge**: The orchestrator automatically detects preprocessing→VQA chains and configures data flow via environment variable injection.
+* **Advanced VQA Generation**: Ties extracted image features to text via state-of-the-art vision-language models (MedGemma, Qwen2-VL, etc.).
 * **LLM as a Judge**: Evaluates VQA outputs systematically against ground-truth/gold-standard datasets using an LLM Judge, minimizing the need for manual grading.
 * **Dockerized Environments**: Specific `Dockerfile`s (e.g., `Dockerfile.3090`, `Dockerfile.5090`, `Dockerfile.eval`) ensure dependency isolation and hardware-specific optimization.
 
@@ -113,7 +115,18 @@ cd pipeline-vqa/Thesis
 
 
 2. **Build the Docker Images:**
-We recommend running modules using Docker to avoid dependency conflicts. Navigate to the module you want to run and execute its build script:
+We recommend running modules using Docker to avoid dependency conflicts.
+
+**Option A: Build All Images (Recommended)**
+```bash
+# From the Thesis/ root directory:
+./build_all_images.sh
+# Automatically discovers and builds all Docker images in the project
+
+```
+
+**Option B: Build Individual Modules**
+Navigate to the module you want to run and execute its build script:
 ```bash
 cd preprocessing/segmentation
 ./scripts/build_image.sh
