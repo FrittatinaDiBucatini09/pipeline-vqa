@@ -36,10 +36,11 @@ echo ""
 # Find directories to clean
 DIRS_TO_CLEAN=()
 
-# 1. Orchestrator Runs
-if [ -d "orchestrator_runs" ]; then
-    DIRS_TO_CLEAN+=("orchestrator_runs")
-fi
+# 1. Orchestrator Runs (PRESERVED)
+# if [ -d "orchestrator_runs" ]; then
+#     DIRS_TO_CLEAN+=("orchestrator_runs")
+# fi
+
 
 # 2. Search in vqa/ for results
 if [ -d "vqa" ]; then

@@ -124,6 +124,15 @@ if [ -n "$DATA_FILE_OVERRIDE" ]; then
     METADATA_FILENAME="$DATA_FILE_OVERRIDE"
 fi
 
+# ROUTING OVERRIDE: Use expanded queries from medclip_routing middleware
+# Copy the JSONL into the metadata directory so Docker can mount it normally.
+if [ -n "$ROUTED_DATASET_OVERRIDE" ] && [ -f "$ROUTED_DATASET_OVERRIDE" ]; then
+    echo "🔵 [ROUTING] Importing expanded dataset from: $ROUTED_DATASET_OVERRIDE"
+    cp "$ROUTED_DATASET_OVERRIDE" "$METADATA_DIR/expanded_queries.jsonl"
+    METADATA_FILENAME="expanded_queries.jsonl"
+    echo "🔵 [ROUTING] METADATA_FILENAME set to: $METADATA_FILENAME"
+fi
+
 # CRITICAL: Enforce the correct Docker Image Name
 # (Prevents config files from overriding with the old bbox image name)
 IMAGE_NAME="heatmap_gen:3090"
@@ -269,6 +278,7 @@ docker run --rm \
     --user "$(id -u):$(id -g)" \
     -e HOME="/workspace" \
     -e MPLCONFIGDIR="/tmp/matplotlib_cache" \
+    -e XDG_CACHE_HOME="/tmp/cache" \
     $DOCKER_ENV_ARGS \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
     -v "/datasets/MIMIC-CXR:/datasets/MIMIC-CXR:ro" \

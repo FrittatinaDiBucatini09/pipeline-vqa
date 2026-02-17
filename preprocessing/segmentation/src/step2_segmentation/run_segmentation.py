@@ -5,6 +5,8 @@ import json
 import torch
 import numpy as np
 import cv2
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
 from pathlib import Path
 from tqdm import tqdm
 from typing import List, Dict, Any, Tuple

@@ -60,6 +60,28 @@ docker run --rm \
     "$IMAGE_NAME" \
     chmod -R 777 /workspace/data/results
 
+# ROUTING OVERRIDE: Convert ROUTED_DATASET_OVERRIDE into DATA_FILE_OVERRIDE
+# before Docker starts. Copy the JSONL into the metadata dir so Docker can mount it.
+if [ -n "$ROUTED_DATASET_OVERRIDE" ] && [ -f "$ROUTED_DATASET_OVERRIDE" ]; then
+    echo "🔵 [ROUTING] Importing expanded dataset from: $ROUTED_DATASET_OVERRIDE"
+    mkdir -p "$PHYS_DIR/metadata"
+    cp "$ROUTED_DATASET_OVERRIDE" "$PHYS_DIR/metadata/expanded_queries.jsonl"
+    export DATA_FILE_OVERRIDE="expanded_queries.jsonl"
+    echo "🔵 [ROUTING] DATA_FILE_OVERRIDE set to: $DATA_FILE_OVERRIDE"
+fi
+
+# DATASET OVERRIDE: Copy override file into metadata/ dir so Docker can mount it.
+# Docker mounts $PHYS_DIR/metadata -> /workspace/metadata, so the file must be
+# inside that subdirectory. If the override file lives at the project root ($PHYS_DIR),
+# copy it into metadata/ before launching the container.
+if [ -n "$DATA_FILE_OVERRIDE" ]; then
+    mkdir -p "$PHYS_DIR/metadata"
+    if [ -f "$PHYS_DIR/$DATA_FILE_OVERRIDE" ] && [ ! -f "$PHYS_DIR/metadata/$DATA_FILE_OVERRIDE" ]; then
+        echo "🔵 [OVERRIDE] Copying $DATA_FILE_OVERRIDE into metadata/ for Docker mount"
+        cp "$PHYS_DIR/$DATA_FILE_OVERRIDE" "$PHYS_DIR/metadata/$DATA_FILE_OVERRIDE"
+    fi
+fi
+
 # 3. Launch Container
 # Explicitly pass GPU device ID provided by Slurm
 # Mount shared /llms folder

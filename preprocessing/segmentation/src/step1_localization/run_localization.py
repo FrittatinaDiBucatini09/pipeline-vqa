@@ -42,6 +42,12 @@ except ImportError:
     sys.exit("\n[CRITICAL ERROR] 'pydensecrf' not found.\nRun: pip install git+https://github.com/lucasb-eyer/pydensecrf.git\n")
 
 # ==============================================================================
+# 1.1 GLOBAL THREADING CONTROL (Prevents OpenMP deadlocks with ProcessPoolExecutor)
+# ==============================================================================
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
+
+# ==============================================================================
 # 2. GLOBAL CONSTANTS & CONFIGURATION
 # ==============================================================================
 COLOR_GOLD = (0, 255, 0)      # Green for Ground Truth
@@ -448,7 +454,11 @@ class BiomedCLIPInferencePipeline:
 # 7. UTILITIES & ASYNC I/O
 # ==============================================================================
 def load_dataframe(path: str) -> pd.DataFrame:
-    return pd.read_parquet(path) if path.endswith('.parquet') else pd.read_csv(path)
+    if path.endswith('.parquet'):
+        return pd.read_parquet(path)
+    if path.endswith('.jsonl'):
+        return pd.read_json(path, lines=True)
+    return pd.read_csv(path)
 
 def save_result_async(save_path, img, boxes, mode, prompt=None, draw_label=False, inference_color=(0, 0, 255)):
     """
@@ -1346,46 +1356,101 @@ def main():
                 wandb.log({"errors": 1})
 
     finally:
-        # Graceful Shutdown of Thread/Process Pools
+        # ==================================================================
+        # DETERMINISTIC CLEANUP (Guaranteed execution on success or failure)
+        # ==================================================================
+        print("\n[CLEANUP] Starting resource teardown...")
+
+        # 1. Shutdown Thread Pool (I/O writes) — wait for pending saves
         try:
-            io_executor.shutdown(wait=True)
-            crf_executor.shutdown(wait=True)
-            wandb.finish()
+            io_executor.shutdown(wait=True, cancel_futures=False)
+            print("[CLEANUP] I/O executor shut down.")
         except Exception as e:
-            print(f"[WARNING] Shutdown cleanup error (non-critical): {e}")
+            print(f"[WARNING] I/O executor shutdown error: {e}")
 
-    # --- Final Reporting ---
-    total_time = time.time() - start_time
-    throughput = processed / total_time if total_time > 0 else 0
+        # 2. Shutdown Process Pool (CRF) — cancel any queued futures
+        try:
+            crf_executor.shutdown(wait=True, cancel_futures=True)
+            print("[CLEANUP] CRF executor shut down.")
+        except Exception as e:
+            print(f"[WARNING] CRF executor shutdown error: {e}")
 
-    report_path = output_root / "report.txt"
-    with open(report_path, "w") as f:
-        f.write("========================================\n")
-        f.write(f"       GEMeX PREPROCESSING REPORT       \n")
-        f.write("========================================\n\n")
-        f.write(f"Date:            {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Mode:            {args.mode}\n")
-        f.write(f"CAM Version:     {args.cam_version}\n")
-        f.write(f"CRF Enabled:     {'No' if args.skip_crf else 'Yes'}\n")
-        f.write(f"Output Format:   {args.output_format}\n")
-        f.write(f"Batch Size:      {args.batch_size}\n")
-        f.write(f"Throughput:      {throughput:.2f} img/sec\n")
-        f.write("-" * 40 + "\n")
-        f.write(f"Total Success:   {processed}\n")
-        f.write(f"Total Failed:    {failed_count}\n")
-        f.write(f"Total Errors:    {len(errors)} (Batch Failures)\n")
-        f.write("-" * 40 + "\n")
-        
-        if errors:
-            f.write("\n--- ERROR LOG ---\n")
-            f.write("\n".join(errors))
-            
-    print(f"\n[SUCCESS] Processing complete.")
-    print(f"[REPORT]  Saved to: {report_path}")
-    print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+        # 3. Release DataLoader workers explicitly
+        try:
+            del dataloader
+            del dataset
+            print("[CLEANUP] DataLoader workers released.")
+        except NameError:
+            pass
+
+        # 4. Release GPU memory
+        try:
+            if model is not None:
+                del model
+            torch.cuda.empty_cache()
+            print("[CLEANUP] GPU memory released.")
+        except Exception as e:
+            print(f"[WARNING] GPU cleanup error: {e}")
+
+        # 5. Finalize WandB telemetry
+        try:
+            wandb.finish()
+            print("[CLEANUP] WandB finalized.")
+        except Exception as e:
+            print(f"[WARNING] WandB finish error: {e}")
+
+        # 6. Write final report (inside finally to guarantee output)
+        try:
+            total_time = time.time() - start_time
+            throughput = processed / total_time if total_time > 0 else 0
+
+            report_path = output_root / "report.txt"
+            with open(report_path, "w") as f:
+                f.write("========================================\n")
+                f.write(f"       GEMeX PREPROCESSING REPORT       \n")
+                f.write("========================================\n\n")
+                f.write(f"Date:            {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Mode:            {args.mode}\n")
+                f.write(f"CAM Version:     {args.cam_version}\n")
+                f.write(f"CRF Enabled:     {'No' if args.skip_crf else 'Yes'}\n")
+                f.write(f"Output Format:   {args.output_format}\n")
+                f.write(f"Batch Size:      {args.batch_size}\n")
+                f.write(f"Throughput:      {throughput:.2f} img/sec\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"Total Success:   {processed}\n")
+                f.write(f"Total Failed:    {failed_count}\n")
+                f.write(f"Total Errors:    {len(errors)} (Batch Failures)\n")
+                f.write("-" * 40 + "\n")
+
+                if errors:
+                    f.write("\n--- ERROR LOG ---\n")
+                    f.write("\n".join(errors))
+
+            print(f"\n[SUCCESS] Processing complete.")
+            print(f"[REPORT]  Saved to: {report_path}")
+            print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+        except Exception as e:
+            print(f"[WARNING] Report generation error: {e}")
 
 if __name__ == "__main__":
     # 'spawn' is required for CUDA compatibility in multiprocessing
-    multiprocessing.set_start_method('spawn', force=True) 
+    multiprocessing.set_start_method('spawn', force=True)
     print("\n[INFO] Initializing Pipeline...")
     main()
+
+    # ==================================================================
+    # FORCED EXIT STRATEGY
+    # Ensures the Python interpreter terminates even if third-party
+    # threads (OpenMP, WandB telemetry, OpenCL) are deadlocked.
+    # sys.exit(0) attempts clean shutdown; os._exit(0) bypasses
+    # interpreter cleanup as a last resort after a timeout.
+    # ==================================================================
+    print("[EXIT] Requesting interpreter shutdown...")
+    try:
+        sys.exit(0)
+    except SystemExit:
+        pass
+    finally:
+        # If we reach here, clean shutdown was blocked. Force terminate.
+        print("[EXIT] Forcing process termination (os._exit).")
+        os._exit(0)

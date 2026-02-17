@@ -1,10 +1,10 @@
 #!/bin/bash
 # ==============================================================================
-# MedCLIP Agentic Routing: Docker Execution Wrapper
+# MedCLIP Agentic Routing: Docker Execution Wrapper (NLP Middleware)
 # ==============================================================================
 # Description:
 #   Configures the Docker environment, mounts necessary volumes (read-only where
-#   appropriate), and launches the Python pipeline with the specified parameters.
+#   appropriate), and launches the NLP query expansion pipeline.
 # ==============================================================================
 set -e
 
@@ -42,24 +42,10 @@ HF_CACHE_DIR="$PHYS_DIR/hf_cache"
 METADATA_FILENAME="gemex_VQA_mimic_mapped.csv"
 PATH_COLUMN="image_path"
 TEXT_COLUMN="question"
-VIS_REGIONS_COL="visual_regions"
-
-# --- Hardware & Performance ---
-BATCH_SIZE=8
-NUM_WORKERS=4
 
 # --- Debugging & Limits ---
 WANDB_MODE="disabled"
 STOP_AFTER=""
-
-# --- BiomedCLIP + GradCAM ---
-MODEL_NAME="hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"
-CLIP_VERSION="ViT-B/16"
-CAM_THRESHOLD=0.50
-CAM_VERSION="gScoreCAM"
-TOPK=300
-ENABLE_MULTI_BOXES="true"
-MIN_BOX_AREA="0.005"
 
 # --- Routing Thresholds ---
 ENTITY_THRESHOLD=2
@@ -89,9 +75,9 @@ if [ -n "$CONFIG_FILE" ]; then
         echo "[CONFIG] Loading experiment config from: $CONFIG_FILE"
         echo "------------------------------------------------"
         source "$CONFIG_FILE"
-        echo "   -> CAM_THRESHOLD: $CAM_THRESHOLD"
         echo "   -> ENTITY_THRESHOLD: $ENTITY_THRESHOLD"
         echo "   -> WORD_THRESHOLD: $WORD_THRESHOLD"
+        echo "   -> GEMMA_MAX_NEW_TOKENS: $GEMMA_MAX_NEW_TOKENS"
         echo "------------------------------------------------"
     else
         echo "[ERROR] Config file not found: $CONFIG_FILE"
@@ -120,22 +106,14 @@ fi
 echo "----------------------------------------------------------------"
 echo "[SAFETY CHECK] Verifying Configuration Constraints..."
 
-# Check 1: Dataset Availability
-if [ ! -d "/datasets/MIMIC-CXR" ]; then
-    echo "[CRITICAL ERROR] Dataset directory not found!"
-    echo "   Path '/datasets/MIMIC-CXR' does not exist on this node ($HOSTNAME)."
-    echo "   Ensure you are running on the correct node (faretra) or the mount is active."
-    exit 1
-fi
-
-# Check 2: Metadata File Existence
+# Check: Metadata File Existence
 if [ ! -f "$METADATA_DIR/$METADATA_FILENAME" ]; then
     echo "[CRITICAL ERROR] Metadata file not found!"
     echo "   Looking for: $METADATA_DIR/$METADATA_FILENAME"
     exit 1
 fi
 
-echo "[OK] Configuration valid. Mode: Agentic Routing."
+echo "[OK] Configuration valid. Mode: NLP Query Expansion Middleware."
 echo "----------------------------------------------------------------"
 
 
@@ -154,17 +132,10 @@ chmod -R 777 "$OUTPUT_DIR" 2>/dev/null || true
 # ==============================================================================
 
 CMD_ARGS=(
-    "--input_dir" "/datasets/MIMIC-CXR"
     "--output_dir" "/workspace/data/output"
     "--metadata_file" "/workspace/metadata/$METADATA_FILENAME"
     "--path_col" "$PATH_COLUMN"
     "--text_col" "$TEXT_COLUMN"
-    "--batch_size" "$BATCH_SIZE"
-    "--num_workers" "$NUM_WORKERS"
-    "--model_name" "$MODEL_NAME"
-    "--cam_version" "$CAM_VERSION"
-    "--cam_threshold" "$CAM_THRESHOLD"
-    "--min_box_area" "$MIN_BOX_AREA"
     "--entity_threshold" "$ENTITY_THRESHOLD"
     "--word_threshold" "$WORD_THRESHOLD"
     "--gemma_max_new_tokens" "$GEMMA_MAX_NEW_TOKENS"
@@ -174,11 +145,6 @@ CMD_ARGS=(
 # Optional: Debug limit
 if [ -n "$STOP_AFTER" ]; then
     CMD_ARGS+=("--stop_after" "$STOP_AFTER")
-fi
-
-# Optional: Multi-box toggle
-if [ "$ENABLE_MULTI_BOXES" = "false" ]; then
-    CMD_ARGS+=("--no_multi_box")
 fi
 
 
@@ -198,11 +164,9 @@ docker run --rm \
     --shm-size=16g \
     --user "$(id -u):$(id -g)" \
     -e HOME="/tmp" \
-    -e MPLCONFIGDIR="/tmp/matplotlib_cache" \
     -e WANDB_MODE="$WANDB_MODE" \
     $DOCKER_ENV_ARGS \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
-    -v "/datasets/MIMIC-CXR:/datasets/MIMIC-CXR:ro" \
     -v "$OUTPUT_DIR":/workspace/data/output \
     -v "$METADATA_DIR":/workspace/metadata \
     -v "$HF_CACHE_DIR":/workspace/hf_cache \

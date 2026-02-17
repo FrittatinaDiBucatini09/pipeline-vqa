@@ -47,7 +47,7 @@ DATASET_DIR="/datasets/MIMIC-CXR"
 # Full dataset: gemex_VQA_mimic_mapped.csv (290K samples)
 # Stratified sample: mimic_ext_sample_4k.csv (4K samples, preserves distribution)
 # See: scripts/create_stratified_sample.py and SAMPLING_STRATEGY.md
-METADATA_FILE="/workspace/metadata/mimic_ext_sample_4k.csv"
+METADATA_FILE="/workspace/metadata/gemex_VQA_mimic_mapped.csv"
 if [ -n "$DATA_FILE_OVERRIDE" ]; then
     METADATA_FILE="/workspace/metadata/$DATA_FILE_OVERRIDE"
     echo "🔵 [OVERRIDE] Forcing Dataset: $METADATA_FILE"

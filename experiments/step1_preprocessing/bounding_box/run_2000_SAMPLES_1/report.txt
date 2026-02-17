@@ -1,0 +1,17 @@
+============================================================
+Pipeline Orchestrator Run Report
+============================================================
+Timestamp : 2026-02-17 02:25:20
+Run Dir   : /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_022520
+Job ID    : 7921198
+Dry Run   : False
+Dataset   : mimic_ext_stratified_2000_samples.csv
+
+------------------------------------------------------------
+Step   Stage                          Config                        
+------------------------------------------------------------
+1      Preprocessing: Bounding Box    configs/exp/S_question_T0.45_C_crf_on_P_loose.conf
+2      VQA Generation                 configs/generation/hard_coded_gen.conf
+3      VQA Evaluation (Judge)         configs/judge/hard_coded_judge.conf
+
+============================================================

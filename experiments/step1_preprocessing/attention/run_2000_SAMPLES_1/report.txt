@@ -1,0 +1,15 @@
+============================================================
+Pipeline Orchestrator Run Report
+============================================================
+Timestamp : 2026-02-17 13:08:34
+Run Dir   : /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_130834
+Job ID    : 7929092
+Dry Run   : False
+Dataset   : mimic_ext_stratified_2000_samples.csv
+
+------------------------------------------------------------
+Step   Stage                          Config                        
+------------------------------------------------------------
+1      Preprocessing: Attention Map   configs/exp/S_question_T0.30_C_crf_on_P_smart.conf
+
+============================================================

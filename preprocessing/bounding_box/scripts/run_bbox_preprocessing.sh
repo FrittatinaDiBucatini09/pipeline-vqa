@@ -155,6 +155,15 @@ if [ -n "$DATA_FILE_OVERRIDE" ]; then
     METADATA_FILENAME="$DATA_FILE_OVERRIDE"
 fi
 
+# ROUTING OVERRIDE: Use expanded queries from medclip_routing middleware
+# Copy the JSONL into the metadata directory so Docker can mount it normally.
+if [ -n "$ROUTED_DATASET_OVERRIDE" ] && [ -f "$ROUTED_DATASET_OVERRIDE" ]; then
+    echo "🔵 [ROUTING] Importing expanded dataset from: $ROUTED_DATASET_OVERRIDE"
+    cp "$ROUTED_DATASET_OVERRIDE" "$METADATA_DIR/expanded_queries.jsonl"
+    METADATA_FILENAME="expanded_queries.jsonl"
+    echo "🔵 [ROUTING] METADATA_FILENAME set to: $METADATA_FILENAME"
+fi
+
 # Resolve OUTPUT_DIR to absolute path (required for Docker mount)
 if [[ "$OUTPUT_DIR" != /* ]]; then
     OUTPUT_DIR="$PHYS_DIR/$OUTPUT_DIR"
@@ -322,6 +331,7 @@ docker run --rm \
     --user "$(id -u):$(id -g)" \
     -e HOME="/tmp" \
     -e MPLCONFIGDIR="/tmp/matplotlib_cache" \
+    -e XDG_CACHE_HOME="/tmp/cache" \
     -e WANDB_MODE="$WANDB_MODE" \
     $DOCKER_ENV_ARGS \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \

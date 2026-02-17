@@ -1,10 +1,10 @@
 # ==============================================================================
-# DOCKERFILE: MedCLIP Agentic Routing (RTX 3090 / Ampere)
+# DOCKERFILE: MedCLIP Agentic Routing - NLP Middleware (RTX 3090 / Ampere)
 # ==============================================================================
 # Description:
-#   Defines the computational environment for the Agentic Routing preprocessing
-#   stage. Loads SciSpacy (CPU), Gemma-2-2B-it (~5GB VRAM), and BiomedCLIP
-#   (~1GB VRAM) for query-aware bounding box generation via GradCAM.
+#   Defines the computational environment for the NLP Query Expansion middleware.
+#   Loads SciSpacy (CPU) and Gemma-2-2B-it (~5GB VRAM) for query-aware
+#   evaluation and expansion of medical queries.
 # ==============================================================================
 
 FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
@@ -32,8 +32,6 @@ RUN apt-get update -y && \
     build-essential \
     curl \
     git \
-    libgl1 \
-    libglib2.0-0 \
     python3 \
     python3-dev \
     python3-pip \
@@ -63,8 +61,6 @@ RUN pip install --upgrade pip && \
 
 RUN pip install --no-cache-dir \
     torch \
-    torchvision \
-    torchaudio \
     --index-url https://download.pytorch.org/whl/cu121
 
 # ==============================================================================

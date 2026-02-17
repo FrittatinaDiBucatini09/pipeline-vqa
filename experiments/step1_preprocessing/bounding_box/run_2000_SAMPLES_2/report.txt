@@ -1,0 +1,18 @@
+============================================================
+Pipeline Orchestrator Run Report
+============================================================
+Timestamp : 2026-02-17 12:07:12
+Run Dir   : /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_120712
+Job ID    : DRY_RUN
+Dry Run   : True
+Dataset   : mimic_ext_stratified_2000_samples.csv
+
+------------------------------------------------------------
+Step   Stage                          Config                        
+------------------------------------------------------------
+1      Preprocessing: Attention Map   configs/exp/S_question_T0.30_C_crf_on_P_smart.conf
+2      Routing: NLP Query Expansion   configs/default.conf          
+3      VQA Generation                 configs/generation/hard_coded_gen.conf
+4      VQA Evaluation (Judge)         configs/judge/hard_coded_judge.conf
+
+============================================================

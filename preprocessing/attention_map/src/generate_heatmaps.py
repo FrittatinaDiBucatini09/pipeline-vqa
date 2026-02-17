@@ -56,6 +56,12 @@ except ImportError as e:
         print("CRF will be disabled unless pydensecrf is installed.")
 
 # ==============================================================================
+# 1.1 GLOBAL THREADING CONTROL (Prevents OpenMP deadlocks with ThreadPoolExecutor)
+# ==============================================================================
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
+
+# ==============================================================================
 # 2. GLOBAL CONSTANTS & CONFIGURATION
 # ==============================================================================
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.dcm'}
@@ -494,7 +500,11 @@ def generate_and_save_heatmap(
 # 8. UTILITIES & ASYNC I/O
 # ==============================================================================
 def load_dataframe(path: str) -> pd.DataFrame:
-    return pd.read_parquet(path) if path.endswith('.parquet') else pd.read_csv(path)
+    if path.endswith('.parquet'):
+        return pd.read_parquet(path)
+    if path.endswith('.jsonl'):
+        return pd.read_json(path, lines=True)
+    return pd.read_csv(path)
 
 
 def generate_vqa_manifest(manifest_records: List[Dict], output_root: Path) -> None:
@@ -919,43 +929,92 @@ def main():
                 wandb.log({"errors": 1})
 
     finally:
-        io_executor.shutdown(wait=True)
-        wandb.finish()
+        # ==================================================================
+        # DETERMINISTIC CLEANUP (Guaranteed execution on success or failure)
+        # ==================================================================
+        print("\n[CLEANUP] Starting resource teardown...")
 
-    # --- Final Reporting ---
-    total_time = time.time() - start_time
-    throughput = processed / total_time if total_time > 0 else 0
+        # 1. Shutdown Thread Pool (I/O writes) — wait for pending saves
+        try:
+            io_executor.shutdown(wait=True, cancel_futures=False)
+            print("[CLEANUP] I/O executor shut down.")
+        except Exception as e:
+            print(f"[WARNING] I/O executor shutdown error: {e}")
 
-    report_path = output_root / "report.txt"
-    with open(report_path, "w") as f:
-        f.write("========================================\n")
-        f.write(f"    ATTENTION MAP HEATMAP REPORT        \n")
-        f.write("========================================\n\n")
-        f.write(f"Date:            {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"CAM Version:     {args.cam_version}\n")
-        f.write(f"Colormap:        {args.colormap}\n")
-        f.write(f"Alpha:           {args.alpha}\n")
-        f.write(f"Body Mask:       {'Yes' if args.enable_body_mask else 'No'}\n")
-        f.write(f"Batch Size:      {args.batch_size}\n")
-        f.write(f"Throughput:      {throughput:.2f} img/sec\n")
-        f.write("-" * 40 + "\n")
-        f.write(f"Total Success:   {processed}\n")
-        f.write(f"Total Failed:    {failed_count}\n")
-        f.write(f"Total Errors:    {len(errors)} (Batch Failures)\n")
-        f.write("-" * 40 + "\n")
-        
-        if errors:
-            f.write("\n--- ERROR LOG ---\n")
-            f.write("\n".join(errors))
-            
-    print(f"\n[SUCCESS] Heatmap generation complete.")
-    print(f"[REPORT]  Saved to: {report_path}")
-    print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+        # 2. Release DataLoader workers explicitly
+        try:
+            del dataloader
+            del dataset
+            print("[CLEANUP] DataLoader workers released.")
+        except NameError:
+            pass
 
-    # Generate VQA-ready manifest for downstream pipeline stages
-    generate_vqa_manifest(vqa_manifest_records, output_root)
+        # 3. Release GPU memory
+        try:
+            if model is not None:
+                del model
+            torch.cuda.empty_cache()
+            print("[CLEANUP] GPU memory released.")
+        except Exception as e:
+            print(f"[WARNING] GPU cleanup error: {e}")
+
+        # 4. Finalize WandB telemetry
+        try:
+            wandb.finish()
+            print("[CLEANUP] WandB finalized.")
+        except Exception as e:
+            print(f"[WARNING] WandB finish error: {e}")
+
+        # 5. Write final report (inside finally to guarantee output)
+        try:
+            total_time = time.time() - start_time
+            throughput = processed / total_time if total_time > 0 else 0
+
+            report_path = output_root / "report.txt"
+            with open(report_path, "w") as f:
+                f.write("========================================\n")
+                f.write(f"    ATTENTION MAP HEATMAP REPORT        \n")
+                f.write("========================================\n\n")
+                f.write(f"Date:            {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"CAM Version:     {args.cam_version}\n")
+                f.write(f"Colormap:        {args.colormap}\n")
+                f.write(f"Alpha:           {args.alpha}\n")
+                f.write(f"Body Mask:       {'Yes' if args.enable_body_mask else 'No'}\n")
+                f.write(f"Batch Size:      {args.batch_size}\n")
+                f.write(f"Throughput:      {throughput:.2f} img/sec\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"Total Success:   {processed}\n")
+                f.write(f"Total Failed:    {failed_count}\n")
+                f.write(f"Total Errors:    {len(errors)} (Batch Failures)\n")
+                f.write("-" * 40 + "\n")
+
+                if errors:
+                    f.write("\n--- ERROR LOG ---\n")
+                    f.write("\n".join(errors))
+
+            print(f"\n[SUCCESS] Heatmap generation complete.")
+            print(f"[REPORT]  Saved to: {report_path}")
+            print(f"[STATS]   Success: {processed} | Failed: {failed_count} | Speed: {throughput:.2f} img/s")
+        except Exception as e:
+            print(f"[WARNING] Report generation error: {e}")
+
+        # 6. Generate VQA-ready manifest for downstream pipeline stages
+        try:
+            generate_vqa_manifest(vqa_manifest_records, output_root)
+        except Exception as e:
+            print(f"[WARNING] VQA manifest generation error: {e}")
 
 
 if __name__ == "__main__":
     print("\n[INFO] Initializing Attention Map Pipeline...")
     main()
+
+    # Forced exit to prevent zombie processes from deadlocked third-party threads
+    print("[EXIT] Requesting interpreter shutdown...")
+    try:
+        sys.exit(0)
+    except SystemExit:
+        pass
+    finally:
+        print("[EXIT] Forcing process termination (os._exit).")
+        os._exit(0)

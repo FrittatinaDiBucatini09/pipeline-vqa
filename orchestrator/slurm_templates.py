@@ -70,11 +70,48 @@ _PREPROCESSING_OUTPUT_PATHS: Dict[str, str] = {
     "bbox_preproc": "results",
     "attn_map": "results",
     "segmentation": "results/step2_masks",
-    "medclip_routing": "results",
 }
 
 # Set of stage keys that are considered preprocessing stages.
 _PREPROCESSING_STAGE_KEYS = set(_PREPROCESSING_OUTPUT_PATHS.keys())
+
+
+def _generate_routing_to_preprocessing_bridge(script_dir: str) -> str:
+    """Generate bash snippet that bridges routing output to preprocessing input.
+
+    Exports ROUTED_DATASET_OVERRIDE so subsequent preprocessing stages
+    consume the expanded queries JSONL produced by medclip_routing.
+
+    Args:
+        script_dir: Absolute path to the medclip_routing script directory.
+    """
+    output_dir = f"{script_dir}/results"
+
+    return f"""
+# ==============================================================================
+# BRIDGE: Routing (medclip_routing) -> Preprocessing
+# ==============================================================================
+# The routing middleware generates expanded_queries.jsonl with enriched queries.
+# This bridge exports ROUTED_DATASET_OVERRIDE so downstream preprocessing
+# stages consume the expanded dataset.
+
+ROUTING_OUTPUT_DIR="{output_dir}"
+
+echo "[BRIDGE] Stage: medclip_routing -> preprocessing"
+echo "[BRIDGE] Checking for expanded queries at $ROUTING_OUTPUT_DIR/expanded_queries.jsonl"
+
+if [ ! -f "$ROUTING_OUTPUT_DIR/expanded_queries.jsonl" ]; then
+    echo "[ERROR] expanded_queries.jsonl not found at $ROUTING_OUTPUT_DIR"
+    echo "[ERROR] The routing stage may have failed to generate the output file."
+    exit 1
+fi
+
+ROUTING_ROWS=$(wc -l < "$ROUTING_OUTPUT_DIR/expanded_queries.jsonl")
+echo "[BRIDGE] Expanded queries found: $ROUTING_ROWS rows"
+
+export ROUTED_DATASET_OVERRIDE="$ROUTING_OUTPUT_DIR/expanded_queries.jsonl"
+echo "[BRIDGE] ROUTED_DATASET_OVERRIDE=$ROUTED_DATASET_OVERRIDE"
+"""
 
 
 def _generate_preprocessing_to_vqa_bridge(
@@ -259,8 +296,20 @@ def generate_meta_job_sbatch(
             "",
         ])
 
-        # Inject bridge block when any preprocessing stage is followed by VQA generation
+        # Inject bridge blocks for inter-stage data flow
         idx = i - 1  # 0-based index into keys
+
+        # Bridge: medclip_routing -> any preprocessing stage
+        if (idx < len(keys) - 1
+                and keys[idx] == "medclip_routing"
+                and keys[idx + 1] in _PREPROCESSING_STAGE_KEYS):
+            script_dir = stage_cmd.get("script_dir", "")
+            if script_dir:
+                lines.append(
+                    _generate_routing_to_preprocessing_bridge(script_dir)
+                )
+
+        # Bridge: preprocessing -> VQA generation
         if (idx < len(keys) - 1
                 and keys[idx] in _PREPROCESSING_STAGE_KEYS
                 and keys[idx + 1] == "vqa_gen"):

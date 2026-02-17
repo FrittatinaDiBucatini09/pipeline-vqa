@@ -64,6 +64,25 @@ graph TD
 
 ```
 
+### Agentic Query Expansion / Routing (Optional Middleware)
+
+The pipeline includes an optional **NLP middleware stage** (`medclip_routing`) that intercepts the raw dataset before visual preprocessing. When enabled via the orchestrator, it:
+
+1. **Evaluates query quality** using SciSpacy clinical entity extraction (CPU). Queries with fewer than 2 clinical entities or fewer than 5 words are flagged as "brief".
+2. **Expands brief queries** using Gemma-2-2B-it (GPU, ~5GB VRAM), rewriting them into detailed clinical prompts suitable for downstream vision models.
+3. **Outputs an enriched JSONL dataset** (`expanded_queries.jsonl`) with the `question` column overwritten by expanded text, preserving the original in `original_question`.
+
+The enriched dataset is automatically bridged to the next preprocessing stage via the `ROUTED_DATASET_OVERRIDE` environment variable. This architecture isolates NLP models (Gemma) from vision models (BiomedCLIP/MedSAM) across sequential GPU execution steps, preventing OOM issues on the RTX 3090 (24GB).
+
+```
+                             ROUTED_DATASET_OVERRIDE          DATA_FILE_OVERRIDE
+ Raw Dataset ──> [Routing] ─────────────────────────> [Preprocessing] ──────────────> [VQA Gen] ──> [Judge]
+                 (NLP only)                            (Vision only)
+                 SciSpacy + Gemma                      BBox / Attn / Seg
+```
+
+If routing is **not** selected in the orchestrator, preprocessing stages fall back to their default dataset configuration with zero changes required.
+
 ---
 
 ## 🗂 Repository Structure
@@ -73,9 +92,10 @@ pipeline-vqa/
 └── Thesis/
     ├── data_prep/         # Data preparation scripts for GEMEX and MIMIC-CXR
     ├── preprocessing/     # Core computer vision pipeline
-    │   ├── attention_map/ # Heatmap generation from attention weights
-    │   ├── bounding_box/  # BBox extraction and intersection metrics
-    │   └── segmentation/  # Localization and MedSAM/SAM-based segmentation
+    │   ├── attention_map/   # Heatmap generation from attention weights
+    │   ├── bounding_box/    # BBox extraction and intersection metrics
+    │   ├── medclip_routing/ # NLP query expansion middleware (SciSpacy + Gemma)
+    │   └── segmentation/    # Localization and MedSAM/SAM-based segmentation
     ├── vqa/               # Generative AI components
     │   ├── src/           # VQA generation and LLM judge evaluation logic
     │   └── tests/         # Integration and E2E error handling tests
@@ -97,7 +117,8 @@ pipeline-vqa/
 
 
 * **Automated Bounding Boxes**: Gridsearch configurations allow tuning of bounding box extraction thresholds, CRF integration, and region exploding/compositing.
-* **Preprocessing→VQA Bridge**: The orchestrator automatically detects preprocessing→VQA chains and configures data flow via environment variable injection.
+* **Agentic Query Expansion**: Optional NLP middleware that evaluates query quality with SciSpacy and expands brief queries using Gemma-2-2B-it before visual preprocessing, improving downstream VQA quality.
+* **Preprocessing→VQA Bridge**: The orchestrator automatically detects routing→preprocessing and preprocessing→VQA chains and configures data flow via environment variable injection (`ROUTED_DATASET_OVERRIDE`, `DATA_FILE_OVERRIDE`).
 * **Advanced VQA Generation**: Ties extracted image features to text via state-of-the-art vision-language models (MedGemma, Qwen2-VL, etc.).
 * **LLM as a Judge**: Evaluates VQA outputs systematically against ground-truth/gold-standard datasets using an LLM Judge, minimizing the need for manual grading.
 * **Dockerized Environments**: Specific `Dockerfile`s (e.g., `Dockerfile.3090`, `Dockerfile.5090`, `Dockerfile.eval`) ensure dependency isolation and hardware-specific optimization.
