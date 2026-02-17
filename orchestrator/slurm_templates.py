@@ -70,6 +70,7 @@ _PREPROCESSING_OUTPUT_PATHS: Dict[str, str] = {
     "bbox_preproc": "results",
     "attn_map": "results",
     "segmentation": "results/step2_masks",
+    "medclip_routing": "results",
 }
 
 # Set of stage keys that are considered preprocessing stages.

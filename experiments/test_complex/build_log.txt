@@ -1,0 +1,69 @@
+🏗️  Building Docker Image: medclip_routing:3090...
+   Stage root: /home/rbalzani/medical-vqa/Thesis/preprocessing/medclip_routing
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  57.86kB
+Step 1/19 : FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+ ---> 5307765dadf8
+Step 2/19 : LABEL maintainer="Thesis-GEMEX-Project"
+ ---> Using cache
+ ---> 194a2d543028
+Step 3/19 : ENV DEBIAN_FRONTEND=noninteractive
+ ---> Using cache
+ ---> dc301880b8ee
+Step 4/19 : ENV PYTHONUNBUFFERED=1
+ ---> Using cache
+ ---> c84140f9e005
+Step 5/19 : ENV PYTHONDONTWRITEBYTECODE=1
+ ---> Using cache
+ ---> 1d0222d19e17
+Step 6/19 : WORKDIR /workspace
+ ---> Using cache
+ ---> 609c0583a327
+Step 7/19 : ENV TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX"
+ ---> Using cache
+ ---> ecb84c038328
+Step 8/19 : RUN apt-get update -y &&     apt-get install -y --no-install-recommends     build-essential     curl     git     libgl1     libglib2.0-0     python3     python3-dev     python3-pip     python3-venv     && apt-get clean     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 1029ff093652
+Step 9/19 : RUN python3 -m venv /opt/venv
+ ---> Using cache
+ ---> ffb7886fb131
+Step 10/19 : ENV PATH="/opt/venv/bin:$PATH"
+ ---> Using cache
+ ---> c062af7959f7
+Step 11/19 : RUN pip install --upgrade pip &&     pip install --no-cache-dir     wheel     setuptools     packaging     ninja     wrapt     "numpy>=1.21.0,<2.0.0"
+ ---> Using cache
+ ---> 2f676349224c
+Step 12/19 : RUN pip install --no-cache-dir     torch     torchvision     torchaudio     --index-url https://download.pytorch.org/whl/cu121
+ ---> Using cache
+ ---> 9bc15da7af02
+Step 13/19 : COPY docker/requirements.txt .
+ ---> Using cache
+ ---> ace53c2e3524
+Step 14/19 : RUN grep -vE "^torch|^torchvision|^torchaudio" requirements.txt > requirements_clean.txt &&     pip install --no-cache-dir -r requirements_clean.txt
+ ---> Using cache
+ ---> 4cb4533107cd
+Step 15/19 : RUN pip install --no-cache-dir https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+ ---> Using cache
+ ---> 7836bcdb09bb
+Step 16/19 : COPY . /workspace
+ ---> 8632dc73c9c4
+Step 17/19 : RUN mkdir -p /workspace/data /workspace/results
+ ---> Running in 3ae390601935
+ ---> Removed intermediate container 3ae390601935
+ ---> 2b66d36b4e6a
+Step 18/19 : VOLUME ["/workspace/data", "/workspace/results"]
+ ---> Running in 286fd5f0f398
+ ---> Removed intermediate container 286fd5f0f398
+ ---> bd9948ee7f8d
+Step 19/19 : CMD ["python3", "src/main_routing.py", "--help"]
+ ---> Running in 606daaf84e4c
+ ---> Removed intermediate container 606daaf84e4c
+ ---> f4012769bc24
+Successfully built f4012769bc24
+Successfully tagged medclip_routing:3090
+✅ Image built successfully.
+   To check: docker images | grep medclip_routing

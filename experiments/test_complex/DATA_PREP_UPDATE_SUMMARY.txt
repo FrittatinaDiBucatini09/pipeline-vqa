@@ -1,0 +1,74 @@
+================================================================================
+DATA PREPARATION INTEGRATION - SUMMARY
+================================================================================
+Date: 2026-02-17
+Status: ✅ COMPLETE
+
+CHANGES MADE
+------------
+1. data_prep/utils.py
+   - Added "medclip_routing" to TARGET_DIRS array (line 10)
+
+2. data_prep/README.md
+   - Updated 5 locations to document new distribution target
+   - Lines: 126, 51, 74, 145, 158
+
+TEST RESULTS
+------------
+Distribution Test: ✅ PASSED (5/5 targets)
+
+Verified paths:
+  ✅ vqa/test_distribution_medclip.csv
+  ✅ preprocessing/bounding_box/test_distribution_medclip.csv
+  ✅ preprocessing/attention_map/test_distribution_medclip.csv
+  ✅ preprocessing/segmentation/test_distribution_medclip.csv
+  ✅ preprocessing/medclip_routing/test_distribution_medclip.csv
+
+IMPACT
+------
+All data preparation scripts now automatically distribute to medclip_routing:
+
+Script                          → Distributes to medclip_routing
+-----------------------------------------------------------------
+prepare_gemex.py                → YES (auto)
+prepare_gemex_vqa.py            → YES (auto)
+prepare_mimic_ext.py            → YES (auto)
+create_stratified_samples.py   → YES (auto)
+run_all_prep.sh                 → YES (all scripts)
+
+BACKWARD COMPATIBILITY
+----------------------
+✅ No breaking changes
+✅ Existing scripts work without modification
+✅ Registry format unchanged
+✅ Cleanup script compatible
+
+USAGE
+-----
+To populate medclip_routing with datasets:
+
+  cd data_prep
+  bash run_all_prep.sh
+
+This will distribute all datasets to all 5 pipeline stages.
+
+VERIFICATION
+------------
+Check that CSVs exist in medclip_routing:
+
+  ls -lh ../preprocessing/medclip_routing/*.csv
+
+Expected files:
+  - gemex_mimic_mapped.csv
+  - gemex_VQA_mimic_mapped.csv
+  - mimic_ext_mapped.csv
+  - mimic_ext_stratified_4000_samples.csv
+
+DOCUMENTATION
+-------------
+Full details: experiments/test_complex/DATA_PREP_INTEGRATION.md
+Updated report: experiments/test_complex/FINAL_TEST_REPORT.md
+
+================================================================================
+CONCLUSION: Data prep utilities successfully integrated with medclip_routing
+================================================================================

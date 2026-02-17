@@ -32,7 +32,10 @@ METADATA_DIR="$PHYS_DIR"
 HF_CACHE_DIR="$PHYS_DIR/hf_cache"
 
 # --- CSV Column Mapping ---
-METADATA_FILENAME="gemex_VQA_mimic_mapped.csv"
+# NOTE: Use stratified sample by default to avoid sampling bias
+# Full dataset: gemex_VQA_mimic_mapped.csv (290K samples)
+# Stratified sample: mimic_ext_sample_4k.csv (4K samples, preserves distribution)
+METADATA_FILENAME="mimic_ext_sample_4k.csv"
 PATH_COLUMN="image_path"
 TEXT_COLUMN="question"
 VIS_REGIONS_COL="visual_regions"
@@ -43,7 +46,9 @@ BATCH_SIZE=16
 NUM_WORKERS=4
 
 # --- Debugging & Limits ---
-STOP_AFTER="5"
+# DEPRECATED: Use stratified sample CSV instead of STOP_AFTER to avoid bias
+# See: scripts/create_stratified_sample.py and SAMPLING_STRATEGY.md
+STOP_AFTER=""
 
 # --- Heatmap-Specific Parameters ---
 ALPHA=0.5                   # Blending factor: 0.0 = original, 1.0 = heatmap only

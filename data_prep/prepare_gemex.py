@@ -22,20 +22,26 @@ import pandas as pd
 from pathlib import Path
 from datasets import load_dataset
 from tqdm import tqdm
+import sys
+import tempfile
+
+# Add current directory to path to import utils
+sys.path.append(str(Path(__file__).parent))
+import utils
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_MIMIC_ROOT_DIR = "/datasets/MIMIC-CXR/files"
-DEFAULT_OUTPUT_CSV = "../gemex_mimic_mapped.csv"
+BASE_FILENAME = "gemex_mimic_mapped"
 VALID_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.dcm', '.webp'}
 
 def parse_args():
     parser = argparse.ArgumentParser(description='GEMeX to MIMIC-CXR Mapping Utility')
     parser.add_argument('--mimic_root_dir', type=str, default=DEFAULT_MIMIC_ROOT_DIR,
                        help='Root directory of MIMIC-CXR files')
-    parser.add_argument('--output_csv', type=str, default=DEFAULT_OUTPUT_CSV,
-                       help='Output CSV file path')
     parser.add_argument('--max_questions_per_image', type=int, default=6,
                        help='Max questions per image (None for all)')
+    parser.add_argument('--limit', type=int, default=None,
+                       help='Limit the total number of samples (default: None/All)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducibility')
     return parser.parse_args()
@@ -43,9 +49,19 @@ def parse_args():
 def main():
     args = parse_args()
     MIMIC_ROOT_DIR = Path(args.mimic_root_dir)
-    OUTPUT_CSV = args.output_csv
     MAX_QUESTIONS_PER_IMAGE = args.max_questions_per_image
+    LIMIT = args.limit
     RANDOM_SEED = args.seed
+
+    # Generate output filename
+    if LIMIT:
+        OUTPUT_FILENAME = f"{BASE_FILENAME}_{LIMIT}_samples.csv"
+        print(f"[INFO] Limit set to {LIMIT} samples. Output: {OUTPUT_FILENAME}")
+    else:
+        OUTPUT_FILENAME = f"{BASE_FILENAME}.csv"
+        print(f"[INFO] No limit set. Output: {OUTPUT_FILENAME}")
+
+    OUTPUT_CSV = Path(tempfile.gettempdir()) / OUTPUT_FILENAME
 
     print("[INFO] Setting random seed for reproducibility...")
     random.seed(RANDOM_SEED)
@@ -131,55 +147,42 @@ def main():
             row_dict['resolved_local_path'] = local_files_map[stem_id]
             final_rows.append(row_dict)
 
-    # --- 4. EXPORT ---
+    # --- 4. GLOBAL SAMPLING (if limit set) ---
+    if LIMIT:
+        if LIMIT < len(final_rows):
+            print(f"[INFO] Applying global limit: sampling {LIMIT} rows from {len(final_rows)} total...")
+            final_rows = random.sample(final_rows, LIMIT)
+        else:
+             print(f"[INFO] Global limit {LIMIT} >= Total rows {len(final_rows)}. Keeping all.")
+
+
+    # --- 5. EXPORT ---
     print(f"-> Constructing Final DataFrame with {len(final_rows)} rows...")
     df_final = pd.DataFrame(final_rows)
     
-    # Clean up columns: ensure 'image_path' points to the REAL local file
-    # The original 'image_path' from HF is usually just the ID or relative path
-    df_final['original_hf_path'] = df_final['image_path']
-    df_final['image_path'] = df_final['resolved_local_path']
-    
-    # Drop temp columns
-    cols_to_drop = ['stem_id', 'resolved_local_path']
-    df_final.drop(columns=[c for c in cols_to_drop if c in df_final.columns], inplace=True)
+    if not df_final.empty:
+        # Clean up columns: ensure 'image_path' points to the REAL local file
+        # The original 'image_path' from HF is usually just the ID or relative path
+        df_final['original_hf_path'] = df_final['image_path']
+        df_final['image_path'] = df_final['resolved_local_path']
+        
+        # Drop temp columns
+        cols_to_drop = ['stem_id', 'resolved_local_path']
+        df_final.drop(columns=[c for c in cols_to_drop if c in df_final.columns], inplace=True)
+    else:
+        print("[WARNING] Final DataFrame is empty.")
 
     df_final.to_csv(OUTPUT_CSV, index=False)
 
     print("-" * 40)
     print(f"[SUCCESS] Dataset saved to {OUTPUT_CSV}")
-    print(f"[STATS]   Unique Images: {df_final['image_path'].nunique()}")
-    print(f"[STATS]   Total QA Pairs: {len(df_final)}")
+    if not df_final.empty:
+        print(f"[STATS]   Unique Images: {df_final['image_path'].nunique()}")
+        print(f"[STATS]   Total QA Pairs: {len(df_final)}")
     print("-" * 40)
 
-    # --- AUTOMATIC DISTRIBUTION TO MODULE DIRECTORIES ---
-    import shutil
-
-    # Define target directories for this CSV
-    target_dirs = [
-        "../preprocessing/bounding_box",
-        "../preprocessing/attention_map",
-        "../preprocessing/segmentation"
-    ]
-
-    output_filename = Path(OUTPUT_CSV).name
-
-    print("\n" + "=" * 40)
-    print("  AUTOMATIC CSV DISTRIBUTION")
-    print("=" * 40)
-
-    for target_dir in target_dirs:
-        target_path = Path(target_dir) / output_filename
-        try:
-            # Create directory if it doesn't exist
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            # Copy CSV
-            shutil.copy2(OUTPUT_CSV, target_path)
-            print(f"  ✓ Copied to: {target_path}")
-        except Exception as e:
-            print(f"  ✗ Failed to copy to {target_path}: {e}")
-
-    print("=" * 40)
+    # --- AUTOMATIC DISTRIBUTION ---
+    utils.distribute_file(OUTPUT_CSV)
 
 if __name__ == "__main__":
     main()

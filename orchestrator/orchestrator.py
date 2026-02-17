@@ -87,6 +87,13 @@ STAGE_REGISTRY: list[PipelineStage] = [
         description="MedSAM segmentation pipeline",
     ),
     PipelineStage(
+        name="Preprocessing: MedCLIP Agentic Routing",
+        key="medclip_routing",
+        script_path="preprocessing/medclip_routing/submit_routing.sh",
+        config_dir="preprocessing/medclip_routing/configs",
+        description="Query-aware routing with SciSpacy + Gemma + BiomedCLIP",
+    ),
+    PipelineStage(
         name="Bounding Box Evaluation",
         key="bbox_eval",
         script_path="preprocessing/bounding_box/submit_evaluation.sh",
