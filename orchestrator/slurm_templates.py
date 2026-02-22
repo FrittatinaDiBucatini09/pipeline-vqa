@@ -214,6 +214,9 @@ def generate_meta_job_sbatch(
         "# ==============================================================================",
         "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
         f'export ORCH_OUTPUT_DIR="{run_dir}"',
+        "# WandB: group all stages of this meta-job under a shared run group in the UI",
+        f'export WANDB_RUN_GROUP="$(basename \\"{run_dir}\\")"',
+        'export WANDB_MODE="${WANDB_MODE:-online}"',
     ])
 
     if dataset_override:
@@ -262,6 +265,38 @@ def generate_meta_job_sbatch(
         "trap cleanup EXIT",
         "trap 'exit 143' TERM  # Ensure SIGTERM (from SLURM timeout) triggers EXIT trap",
         "",
+        "# ==============================================================================",
+        "# GPU DRAIN HELPER",
+        "# ==============================================================================",
+        "# Polls nvidia-smi until GPU VRAM usage drops below DRAIN_THRESHOLD_MIB MiB.",
+        "# Called between every stage so the next Docker container starts with a clean GPU.",
+        "wait_for_gpu_drain() {",
+        '    local DRAIN_THRESHOLD_MIB=${1:-2048}  # default: 2 GiB',
+        '    local TIMEOUT_S=${2:-120}             # default: 2 min',
+        '    local POLL_S=5',
+        '    local ELAPSED=0',
+        '    local GPU_IDX=${CUDA_VISIBLE_DEVICES:-0}',
+        '    echo "[GPU-DRAIN] Waiting for GPU ${GPU_IDX} VRAM to drop below ${DRAIN_THRESHOLD_MIB} MiB (timeout ${TIMEOUT_S}s)..."',
+        '    while true; do',
+        '        USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$GPU_IDX" 2>/dev/null | tr -d " ")',
+        '        if [ -z "$USED_MIB" ]; then',
+        '            echo "[GPU-DRAIN] nvidia-smi unavailable, skipping drain wait."',
+        '            return 0',
+        '        fi',
+        '        if [ "$USED_MIB" -le "$DRAIN_THRESHOLD_MIB" ]; then',
+        '            echo "[GPU-DRAIN] GPU VRAM usage: ${USED_MIB} MiB — OK, proceeding."',
+        '            return 0',
+        '        fi',
+        '        if [ "$ELAPSED" -ge "$TIMEOUT_S" ]; then',
+        '            echo "[GPU-DRAIN] WARNING: GPU VRAM still ${USED_MIB} MiB after ${TIMEOUT_S}s. Proceeding anyway."',
+        '            return 0',
+        '        fi',
+        '        echo "[GPU-DRAIN] GPU VRAM usage: ${USED_MIB} MiB — waiting ${POLL_S}s..."',
+        '        sleep "$POLL_S"',
+        '        ELAPSED=$((ELAPSED + POLL_S))',
+        '    done',
+        "}",
+        "",
         'echo "============================================================"',
         'echo "Medical VQA Pipeline - Meta-Job"',
         f'echo "Run directory: {run_dir}"',
@@ -295,6 +330,11 @@ def generate_meta_job_sbatch(
             f'echo "[$(date \'+%Y-%m-%d %H:%M:%S\')] DONE:  $CURRENT_STEP"',
             "",
         ])
+
+        # Drain GPU VRAM between stages (not after the last stage)
+        if i < len(stage_commands):
+            lines.append('wait_for_gpu_drain')
+            lines.append("")
 
         # Inject bridge blocks for inter-stage data flow
         idx = i - 1  # 0-based index into keys

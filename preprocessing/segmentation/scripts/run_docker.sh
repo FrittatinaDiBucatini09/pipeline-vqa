@@ -29,6 +29,10 @@ PHYS_DIR="$(dirname "$SCRIPT_DIR")"
 if [ -f "$SCRIPT_DIR/.env" ]; then
   export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
 fi
+# Load .env variables
+if [ -f "$PHYS_DIR/.env" ]; then
+  export $(grep -v '^#' "$PHYS_DIR/.env" | xargs)
+fi
 
 # Auto-detect Docker image from Step 2 config
 # If the config references a medsam3 model, use the SAM3 image (CUDA 12.6+)
@@ -40,6 +44,8 @@ if [ -f "$_CONF2_HOST" ] && grep -q "medsam3" "$_CONF2_HOST" 2>/dev/null; then
 else
     IMAGE_NAME="pipeline_segmentation:3090"
 fi
+
+WANDB_MODE="${WANDB_MODE:-online}"   # WandB mode: online, offline, or disabled
 
 # Create cache and output directories on host to prevent permission issues
 # 1. Cache
@@ -95,6 +101,8 @@ docker run --rm \
     -e HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}" \
     -e HF_TOKEN="${HF_TOKEN:-$HUGGING_FACE_HUB_TOKEN}" \
     -e WANDB_API_KEY="$WANDB_API_KEY" \
+    -e WANDB_MODE="$WANDB_MODE" \
+    -e WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-}" \
     -e MPLCONFIGDIR="/workspace/data/results/cache/matplotlib" \
     -e WANDB_CACHE_DIR="/workspace/data/results/cache/wandb" \
     -e XDG_CACHE_HOME="/workspace/data/results/cache" \

@@ -134,6 +134,7 @@ CMD="$CMD --temperature $TEMPERATURE"
 CMD="$CMD --top_k $TOP_K"
 CMD="$CMD --top_p $TOP_P"
 CMD="$CMD --min_p $MIN_P"
+CMD="$CMD --gpu_memory_utilization ${GPU_MEMORY_UTILIZATION:-0.9}"
 
 # Optional Arguments
 if [ -n "$MAX_SAMPLES" ]; then

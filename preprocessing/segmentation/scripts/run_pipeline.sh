@@ -109,6 +109,7 @@ run_step_1() {
     if [ "${ENABLE_ANATOMICAL_CHECK:-true}" = "true" ]; then CMD_ARGS+=("--enable_anatomical_check"); fi
     if [ "${USE_DYNAMIC_PROMPTS:-true}" = "true" ]; then CMD_ARGS+=("--use_dynamic_prompts"); fi
     if [ "${ENABLE_SMART_PADDING:-true}" = "true" ]; then CMD_ARGS+=("--enable_smart_padding"); fi
+    if [ "${GENERATE_VQA_MANIFEST:-false}" = "true" ]; then CMD_ARGS+=("--generate_vqa_manifest"); fi
 
     # 4. PIPELINE EXECUTION
     # Assumes run_localization.py is located in src/step1_localization/
@@ -208,6 +209,10 @@ run_step_2() {
     
     if [ "${SAVE_VISUALS:-true}" = "true" ]; then
         CMD_ARGS+=("--save_overlays")
+    fi
+
+    if [ "${DISABLE_MASK_SAVING:-false}" = "true" ]; then
+        CMD_ARGS+=("--skip_mask_saving")
     fi
 
     # 5. PIPELINE EXECUTION

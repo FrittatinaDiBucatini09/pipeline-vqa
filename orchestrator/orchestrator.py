@@ -65,6 +65,13 @@ class PipelineStage:
 
 STAGE_REGISTRY: list[PipelineStage] = [
     PipelineStage(
+        name="Routing: NLP Query Expansion",
+        key="medclip_routing",
+        script_path="preprocessing/medclip_routing/submit_routing.sh",
+        config_dir="preprocessing/medclip_routing/configs",
+        description="NLP middleware: SciSpacy entity evaluation + Gemma query expansion",
+    ),
+    PipelineStage(
         name="Preprocessing: Bounding Box",
         key="bbox_preproc",
         script_path="preprocessing/bounding_box/submit_bbox_preprocessing.sh",
@@ -85,13 +92,6 @@ STAGE_REGISTRY: list[PipelineStage] = [
         config_dir="preprocessing/segmentation/configs",
         uses_env_vars=True,
         description="MedSAM segmentation pipeline",
-    ),
-    PipelineStage(
-        name="Routing: NLP Query Expansion",
-        key="medclip_routing",
-        script_path="preprocessing/medclip_routing/submit_routing.sh",
-        config_dir="preprocessing/medclip_routing/configs",
-        description="NLP middleware: SciSpacy entity evaluation + Gemma query expansion",
     ),
     PipelineStage(
         name="Bounding Box Evaluation",
@@ -156,8 +156,58 @@ def configure_stage(stage: PipelineStage) -> StageConfig:
     """Prompt the user for stage-specific configuration."""
     cfg = StageConfig()
 
-    # --- Config file selection ---
-    if stage.config_dir and not stage.uses_env_vars:
+    # --- Special Handling: Segmentation ---
+    # We want to select MODE first, then conditionally ask for configs.
+    if stage.key == "segmentation":
+        # 1. Prompt for Env Vars (Mode & Limit)
+        # This function (defined below) asks for TARGET_MODE and LIMIT
+        cfg.env_overrides = _configure_segmentation()
+        
+        target_mode = cfg.env_overrides.get("TARGET_MODE", "all")
+        
+        # 2. Conditional Config Selection
+        # Step 1 Configs (Localization)
+        step1_config_dir = "preprocessing/segmentation/configs/step1"
+        s1_choice = None
+        
+        # Step 2 Configs (Segmentation)
+        step2_config_dir = "preprocessing/segmentation/configs/step2"
+        s2_choice = None
+
+        # Logic:
+        # If mode == '1' or 'all' -> Ask for Step 1 Config
+        if target_mode in ["1", "all"]:
+            s1_configs = discover_configs(step1_config_dir)
+            if s1_configs:
+                choices = ["(default - use script hardcoded)"] + s1_configs
+                ans1 = inquirer.prompt([
+                    inquirer.List("c1", message="Select Step 1 Config (Localization)", choices=choices)
+                ])
+                if ans1 and ans1["c1"] != "(default - use script hardcoded)":
+                    s1_choice = f"configs/step1/{ans1['c1']}"
+
+        # Logic:
+        # If mode == '2' or 'all' -> Ask for Step 2 Config
+        if target_mode in ["2", "all"]:
+            s2_configs = discover_configs(step2_config_dir)
+            if s2_configs:
+                choices = ["(default - use script hardcoded)"] + s2_configs
+                ans2 = inquirer.prompt([
+                    inquirer.List("c2", message="Select Step 2 Config (MedSAM)", choices=choices)
+                ])
+                if ans2 and ans2["c2"] != "(default - use script hardcoded)":
+                    s2_choice = f"configs/step2/{ans2['c2']}"
+
+        # Combine selected configs into the argument string
+        parts = []
+        if s1_choice: parts.append(s1_choice)
+        if s2_choice: parts.append(s2_choice)
+        
+        if parts:
+            cfg.config_file = " ".join(parts)
+
+    # --- Standard Config Selection (Non-Segmentation) ---
+    elif stage.config_dir:
         configs = discover_configs(stage.config_dir)
         if configs:
             choices = ["(default - no config argument)"] + configs
@@ -171,13 +221,6 @@ def configure_stage(stage: PipelineStage) -> StageConfig:
                 ]
             )
             if answer and answer["config"] != "(default - no config argument)":
-                # Build path relative to the script's working directory.
-                # For submit scripts, cwd = script's parent dir
-                #   e.g. bbox script in preprocessing/bounding_box/
-                #         → configs/gemex/exp_01.conf
-                # For generated wrappers (has_submit_script=False), the
-                # generated sbatch cd's to the module root (e.g. vqa/),
-                # not the script's immediate parent (vqa/scripts/).
                 if stage.has_submit_script:
                     working_dir = Path(stage.script_path).parent
                 else:
@@ -187,8 +230,9 @@ def configure_stage(stage: PipelineStage) -> StageConfig:
                 )
                 cfg.config_file = f"{config_dir_relative}/{answer['config']}"
 
-    # --- Segmentation: env var prompts ---
-    if stage.uses_env_vars:
+    # --- Generic Env Var Prompts (Fallback) ---
+    # Only if not already set (Segmentation sets it above)
+    if stage.uses_env_vars and not cfg.env_overrides:
         cfg.env_overrides = _configure_segmentation()
 
     # --- Bbox eval: positional arg prompts ---

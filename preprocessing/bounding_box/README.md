@@ -232,6 +232,23 @@ The pipeline generates the following outputs in the `results/` directory:
 | `vqa_manifest.csv` | CSV | VQA-ready manifest for downstream pipeline integration |
 | `report.txt` | Text | Processing summary with success/failure statistics |
 
+### WandB Monitoring
+
+Each run logs to the **`GEMeX-VQA-Pipeline`** WandB project under `job_type=step1-bbox-preproc`. The following metrics are tracked:
+
+| Metric | Description |
+|--------|-------------|
+| `processed_images` | Running count of successfully processed images |
+| `errors` / `serialization_errors` | Cumulative error counts |
+| `example_prediction` | Sample bounding box overlay image (logged every 50 batches) |
+| `success_rate` | `processed / (processed + failed)` — written to run summary |
+| `throughput_img_per_sec` | Average images processed per second — written to run summary |
+| `total_time_sec` | Total wall-clock time — written to run summary |
+
+Output artifacts (`predictions.jsonl`, `vqa_manifest.csv`, `report.txt`) are logged as versioned WandB artifacts for data lineage tracking.
+
+To control WandB logging set `WANDB_MODE` before submitting (`online` / `offline` / `disabled`). The `WANDB_API_KEY` is read from the host environment or a `.env` file in the module directory.
+
 ### VQA Manifest Structure
 
 The `vqa_manifest.csv` file enables seamless integration with the VQA generation stage:

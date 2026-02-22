@@ -123,6 +123,21 @@ if [ -n "$DATA_FILE_OVERRIDE" ]; then
     echo "🔵 [OVERRIDE] Forcing Dataset: $DATA_FILE_OVERRIDE"
     DATA_FILE="$DATA_FILE_OVERRIDE"
     DATASET_NAME="" # Disable HF dataset if local file is forced
+
+    # Auto-detect answer column: if the overridden CSV doesn't contain the
+    # configured ANSWER_COLUMN, fall back to common alternatives.
+    if [ -f "$DATA_FILE" ]; then
+        CSV_HEADER=$(head -1 "$DATA_FILE")
+        if ! echo "$CSV_HEADER" | tr ',' '\n' | grep -qx "$ANSWER_COLUMN"; then
+            for ALT_COL in answer_text Answer reference_answer; do
+                if echo "$CSV_HEADER" | tr ',' '\n' | grep -qx "$ALT_COL"; then
+                    echo "⚠️  [OVERRIDE] Column '$ANSWER_COLUMN' not found in CSV. Using '$ALT_COL' instead."
+                    ANSWER_COLUMN="$ALT_COL"
+                    break
+                fi
+            done
+        fi
+    fi
 fi
 
 # ==============================================================================

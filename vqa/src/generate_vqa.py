@@ -630,6 +630,67 @@ def print_metrics(results: Dict, split_name: str):
     print(f"  ROUGE-L:   {results['rougeL']:.4f}")
     print(f"{'='*60}")
 
+
+def filter_missing_images(df: pd.DataFrame, image_column: str) -> pd.DataFrame:
+    """Filter out rows where the image file does not exist or is corrupted."""
+    valid_indices = []
+    missing_count = 0
+    corrupt_count = 0
+
+    print(f"Checking image existence for {len(df)} samples...")
+
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Verifying images"):
+        image_source = row.get(image_column)
+
+        # If it's not a string (e.g. bytes or None), we can't easily check existence here
+        # without trying to load it. For now, assume non-string sources are valid
+        # (or will be handled by load_image).
+        if not isinstance(image_source, str):
+            valid_indices.append(idx)
+            continue
+
+        # Check if it's a URL
+        if image_source.lower().startswith(("http://", "https://")):
+             valid_indices.append(idx)
+             continue
+
+        # Check local file existence and integrity
+        try:
+            full_path = get_image_path(image_source)
+            if not os.path.exists(full_path):
+                missing_count += 1
+                if missing_count <= 5:
+                    print(f"  [MISSING] Image not found: {full_path}")
+                continue
+
+            # Verify image can be fully loaded (catches truncated files)
+            img = Image.open(full_path)
+            img.load()
+            img.close()
+            valid_indices.append(idx)
+        except (OSError, SyntaxError) as e:
+            corrupt_count += 1
+            if corrupt_count <= 5:
+                print(f"  [CORRUPT] Cannot load image: {image_source} ({e})")
+        except Exception:
+            missing_count += 1
+
+    skip_total = missing_count + corrupt_count
+    if skip_total > 0:
+        reasons = []
+        if missing_count > 0:
+            reasons.append(f"{missing_count} missing")
+        if corrupt_count > 0:
+            reasons.append(f"{corrupt_count} corrupt/truncated")
+        print(f"⚠️  WARNING: Skipping {skip_total} images ({', '.join(reasons)}).")
+        print(f"   Original size: {len(df)}")
+        print(f"   Filtered size: {len(valid_indices)}")
+    else:
+        print("✅ All images found and verified.")
+
+    return df.loc[valid_indices].reset_index(drop=True)
+
+
 def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_images: bool = False,
                               use_few_shot: bool = False, num_few_shot: int = 5,
                               few_shot_seed: int = 42, test_df: pd.DataFrame = None,
@@ -669,7 +730,7 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
     for idx, row in df.iterrows():
         question_text = row[question_column]
         image_source = row[image_column]
-
+        
         # Format the question
         formatted_question = format_question_text(question_text)
 
@@ -699,7 +760,14 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
             else:
                 # Use image path directly (assume it's a local file path)
                 if isinstance(image_source, str):
-                    image_path = os.path.abspath(image_source)
+                    # If the path is relative, resolve it against BASE_IMAGE_PATH
+                    # (e.g. VQA_IMAGE_PATH=/preprocessed_images) so that vLLM can
+                    # find it under allowed_local_media_path. Absolute paths are
+                    # kept as-is.
+                    if not os.path.isabs(image_source):
+                        image_path = os.path.abspath(os.path.join(BASE_IMAGE_PATH, image_source))
+                    else:
+                        image_path = os.path.abspath(image_source)
                 else:
                     print(f"Warning: Image source is not a string for sample {idx}, skipping image")
                     image_path = None
@@ -939,23 +1007,36 @@ def main():
         )
 
         # Validate dataset has required columns
-        if args.dataset_name:
-            # For HuggingFace datasets, validate column names
-            sample_keys = df.columns.tolist()
-            print(f"Dataset columns: {sample_keys}")
+        sample_keys = df.columns.tolist()
+        print(f"Dataset columns: {sample_keys}")
 
-            missing_cols = []
-            if args.image_column not in sample_keys:
-                missing_cols.append(args.image_column)
-            if args.question_column not in sample_keys:
-                missing_cols.append(args.question_column)
-            if args.answer_column not in sample_keys:
+        missing_cols = []
+        if args.image_column not in sample_keys:
+            missing_cols.append(args.image_column)
+        if args.question_column not in sample_keys:
+            missing_cols.append(args.question_column)
+        if args.answer_column not in sample_keys:
+            # Auto-detect answer column from common alternatives
+            answer_alternatives = ['answer', 'answer_text', 'Answer', 'reference_answer']
+            detected = None
+            for alt in answer_alternatives:
+                if alt in sample_keys and alt != args.answer_column:
+                    detected = alt
+                    break
+            if detected:
+                print(f"WARNING: Column '{args.answer_column}' not found. "
+                      f"Using '{detected}' instead.")
+                args.answer_column = detected
+            else:
                 missing_cols.append(args.answer_column)
 
-            if missing_cols:
-                raise ValueError(f"Missing required columns: {missing_cols}")
+        if missing_cols:
+            raise ValueError(
+                f"Missing required columns: {missing_cols}. "
+                f"Available columns: {sample_keys}"
+            )
 
-            print("Dataset validation passed.")
+        print("Dataset validation passed.")
 
         # Load few-shot source data if specified (best practice: avoid data leakage)
         few_shot_df = None
@@ -967,6 +1048,12 @@ def main():
             else:
                 few_shot_df = load_vqa_dataset(dataset_name=args.few_shot_source, split=args.split)
             print(f"Loaded {len(few_shot_df)} samples for few-shot examples")
+
+        # Filter missing/corrupt images before any processing
+        if args.use_images:
+            df = filter_missing_images(df, args.image_column)
+            if len(df) == 0:
+                raise ValueError("No valid samples remaining after filtering missing images!")
 
         # Store actual number of samples used
         num_samples_used = len(df)

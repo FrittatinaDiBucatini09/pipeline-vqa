@@ -21,6 +21,27 @@ import time
 from transformers import AutoTokenizer
 import wandb
 
+
+def _init_wandb_safe(**kwargs):
+    """
+    Initialize WandB safely. If it fails, mock EVERYTHING so the script never crashes.
+    """
+    try:
+        wandb.init(**kwargs)
+    except Exception as exc:
+        print(f"[WARNING] WandB initialization failed completely: {exc}")
+        print("[INFO] Switching to MOCK mode. No metrics will be logged.")
+        
+        # Monkey-patch ALL commonly used wandb functions to no-ops
+        wandb.log = lambda *args, **kwargs: None
+        wandb.finish = lambda *args, **kwargs: None
+        wandb.define_metric = lambda *args, **kwargs: None
+        wandb.Image = lambda *args, **kwargs: None # Critical for image logging
+        
+        # Ensure os.environ reflects disabled state just in case
+        os.environ["WANDB_MODE"] = "disabled"
+
+
 # ==============================================================================
 # 1. DEPENDENCY MANAGEMENT & DYNAMIC IMPORTS
 # ==============================================================================
@@ -729,6 +750,54 @@ def _apply_adaptive_padding(box, img_w, img_h, max_pad, min_pad, safe_bounds=Non
     return [nx1, ny1, nx2, ny2]
 
 # ==============================================================================
+# Helper Function: VQA Manifest Generation
+# ==============================================================================
+def generate_vqa_manifest(output_root: Path, question_col: str = 'question',
+                          answer_col: str = 'answer_text') -> None:
+    """
+    Reads predictions.jsonl and generates a VQA-ready CSV manifest.
+    Matches logic in bbox_preprocessing.py.
+    """
+    jsonl_path = output_root / "predictions.jsonl"
+    manifest_path = output_root / "vqa_manifest.csv"
+
+    if not jsonl_path.exists():
+        print(f"[WARNING] predictions.jsonl not found at {jsonl_path}. Skipping manifest generation.")
+        return
+
+    records = []
+    with open(jsonl_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            image_path = entry.get('image_path', '')
+            question = entry.get(question_col, '')
+            answer = entry.get(answer_col, '')
+
+            if not image_path:
+                continue
+
+            records.append({
+                'image_path': image_path,
+                'question': question,
+                'answer': answer,
+            })
+
+    if not records:
+        print("[WARNING] No valid records found in predictions.jsonl. VQA manifest is empty.")
+        return
+
+    df = pd.DataFrame(records)
+    df.to_csv(manifest_path, index=False)
+    print(f"[INFO] VQA manifest generated: {manifest_path} ({len(df)} rows)")
+
+# ==============================================================================
 # 8. MAIN EXECUTION ENTRY POINT
 # ==============================================================================
 def main():
@@ -802,24 +871,46 @@ def main():
     parser.add_argument('--use_dynamic_prompts', action='store_true')
 
     # Multiple Box Handling
-    parser.add_argument('--multi_label', action='store_true', 
+    parser.add_argument('--multi_label', action='store_true',
                         help="If enabled, it returns all bounding boxes above the threshold instead of just the largest one.")
-    parser.add_argument('--min_box_area_ratio', type=float, default=0.01, 
+    parser.add_argument('--min_box_area_ratio', type=float, default=0.01,
                         help="Minimum area of the contour relative to the image (0.01 = 1%) to be considered valid in multi-mode.")
+
+    # VQA Manifest Generation (for bbox-as-preprocessing use case)
+    parser.add_argument('--generate_vqa_manifest', action='store_true',
+                        help="When used with --output_format image, generates a vqa_manifest.csv "
+                             "mapping annotated image paths to questions/answers. "
+                             "This enables using Step 1 as a standalone bbox preprocessing stage for VQA. "
+                             "predictions.jsonl still keeps original image paths for Step 2 (MedSAM) compatibility.")
 
     args = parser.parse_args()
     
     # --- WandB Initialization ---
     if "WANDB_API_KEY" not in os.environ:
         print("[WARNING] WANDB_API_KEY not found. Runs will be offline.")
-        os.environ["WANDB_MODE"] = "offline"
+        os.environ.setdefault("WANDB_MODE", "offline")
 
-    wandb.init(
-        project="GEMeX-Preprocessing",
-        name=f"{args.mode}-{args.cam_version}",
-        config=vars(args),
-        dir=args.output_dir
+    _wandb_group = (
+        os.environ.get("WANDB_RUN_GROUP")
+        or (Path(os.environ["ORCH_OUTPUT_DIR"]).name if "ORCH_OUTPUT_DIR" in os.environ else None)
+        or f"solo-{time.strftime('%Y%m%d_%H%M%S')}"
     )
+    _init_wandb_safe(
+        project="GEMeX-VQA-Pipeline",
+        name=os.environ.get("WANDB_RUN_NAME") or f"localization-{args.mode}-{args.cam_version}",
+        group=_wandb_group,
+        job_type="step1-localization",
+        tags=["preprocessing", "localization", "segmentation", args.mode, args.cam_version,
+              Path(args.metadata_file or "unknown").stem],
+        config=vars(args),
+        dir=args.output_dir,
+    )
+    try:
+        wandb.define_metric("processed_images", summary="max")
+        wandb.define_metric("errors", summary="sum")
+        wandb.define_metric("serialization_errors", summary="sum")
+    except Exception:
+        pass
 
     input_root = Path(args.input_dir)
     output_root = Path(args.output_dir)
@@ -987,6 +1078,7 @@ def main():
     processed = 0
     failed_count = 0
     errors = []
+    vqa_manifest_records = []  # Collects (image_path, question, answer) for VQA bridge
     
     # Thread Pool for I/O (Disk Writes)
     io_executor = ThreadPoolExecutor(max_workers=4)
@@ -1283,35 +1375,44 @@ def main():
                             suffix = original_rel_path.suffix
                             unique_idx = processed + 1
                             new_filename = f"{stem}_idx{unique_idx}{suffix}"
-                            
+
                             # 2. Determine the relative output path
                             # Maintains the original folder structure (e.g., files/p10/...)
                             relative_save_path = original_rel_path.parent / new_filename
                             full_save_path = output_root / relative_save_path
-                            
+
                             # 3. Update the path for JSONL
                             # DO NOT overwrite image_path with the debug image path.
                             # Downstream steps (Step 2) need the ORIGINAL raw image path.
                             # final_json_image_path = str(relative_save_path) <- DISABLED
-                            
+
                             # We can log the visual path separately if needed
                             visual_debug_path = str(relative_save_path)
-                            
+
                             # 4. Create directories if they don't exist
-                            if not full_save_path.parent.exists(): 
+                            if not full_save_path.parent.exists():
                                 full_save_path.parent.mkdir(parents=True, exist_ok=True)
-                            
+
                             # 5. Launch asynchronous save (Draw Boxes + Write to Disk)
                             io_executor.submit(
-                                save_result_async, 
-                                full_save_path, 
-                                orig_imgs[i].copy(), 
+                                save_result_async,
+                                full_save_path,
+                                orig_imgs[i].copy(),
                                 current_boxes,
                                 args.mode,
                                 prompt=current_prompt,
                                 draw_label=args.draw_labels,
                                 inference_color=user_inference_color
                             )
+
+                            # 6. Collect record for VQA manifest (bbox-as-preprocessing)
+                            if args.generate_vqa_manifest:
+                                raw_data = raw_metadatas[i] if 'raw_metadata' in batch else {}
+                                vqa_manifest_records.append({
+                                    'image_path': visual_debug_path,
+                                    'question': raw_data.get(args.text_col, ''),
+                                    'answer': raw_data.get('answer_text', raw_data.get('answer', '')),
+                                })
 
                         # --- JSONL WRITING (COMMON TO BOTH MODES) ---
                         raw_data = raw_metadatas[i] if 'raw_metadata' in batch else {}
@@ -1393,6 +1494,57 @@ def main():
             print(f"[WARNING] GPU cleanup error: {e}")
 
         # 5. Finalize WandB telemetry
+        # 5a. Populate run summary table with final aggregate metrics
+        try:
+            _total_time = time.time() - start_time
+            wandb.run.summary.update({
+                "final_processed": processed,
+                "final_failed": failed_count,
+                "success_rate": processed / max(processed + failed_count, 1),
+                "throughput_img_per_sec": processed / _total_time if _total_time > 0 else 0.0,
+                "total_time_sec": _total_time,
+            })
+        except Exception as e:
+            print(f"[WARNING] WandB summary update error: {e}")
+
+
+
+        # 5b. Generate VQA manifest if requested (bbox-as-preprocessing mode)
+        try:
+            if args.generate_vqa_manifest:
+                # Priority 1: Use in-memory records if available (fastest, used in image mode)
+                if vqa_manifest_records:
+                    manifest_path = output_root / "vqa_manifest.csv"
+                    pd.DataFrame(vqa_manifest_records).to_csv(manifest_path, index=False)
+                    print(f"[CLEANUP] VQA manifest generated from memory: {manifest_path} ({len(vqa_manifest_records)} rows)")
+                # Priority 2: Scan the JSONL file (robust, used in jsonl mode or restart)
+                else:
+                    print("[CLEANUP] Generating VQA manifest from predictions.jsonl...")
+                    generate_vqa_manifest(
+                        output_root,
+                        question_col=args.text_col,
+                        answer_col='answer_text'
+                    )
+        except Exception as e:
+            print(f"[WARNING] VQA manifest generation error: {e}")
+
+        # 5c. Log output artifacts for data lineage tracking
+        try:
+            artifact = wandb.Artifact(
+                name=f"localization-{wandb.run.id}",
+                type="pipeline-outputs",
+                description="Localization outputs: predictions.jsonl, vqa_manifest.csv, report.txt",
+            )
+            for _fname in ["predictions.jsonl", "vqa_manifest.csv", "report.txt"]:
+                _p = output_root / _fname
+                if _p.exists():
+                    artifact.add_file(str(_p), name=_fname)
+            wandb.log_artifact(artifact)
+            print("[CLEANUP] WandB artifacts logged.")
+        except Exception as e:
+            print(f"[WARNING] WandB artifact logging error: {e}")
+
+        # 5c. Finish the WandB run
         try:
             wandb.finish()
             print("[CLEANUP] WandB finalized.")

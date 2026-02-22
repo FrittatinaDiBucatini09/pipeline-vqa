@@ -55,7 +55,7 @@ BATCH_SIZE=8               # Reduced from 16 to fix OOM error
 NUM_WORKERS=4               # Number of parallel data loading workers (CPU threads)
 
 # --- Debugging & Limits ---
-WANDB_MODE="disabled"       # Disable WandB logging for speed
+WANDB_MODE="${WANDB_MODE:-online}"   # WandB mode: online, offline, or disabled
 # Set to an integer (e.g., "100") to limit processing to the first N images.
 # Leave empty ("") to process the entire dataset.
 STOP_AFTER=""
@@ -333,11 +333,15 @@ docker run --rm \
     -e MPLCONFIGDIR="/tmp/matplotlib_cache" \
     -e XDG_CACHE_HOME="/tmp/cache" \
     -e WANDB_MODE="$WANDB_MODE" \
+    -e WANDB_API_KEY="${WANDB_API_KEY:-}" \
+    -e WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-}" \
+    -e WANDB_CACHE_DIR="/tmp/cache/wandb" \
     $DOCKER_ENV_ARGS \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
     -v "/datasets/MIMIC-CXR:/datasets/MIMIC-CXR:ro" \
     -v "$OUTPUT_DIR":/workspace/data/output \
     -v "$METADATA_DIR":/workspace/metadata \
+    -v "$PHYS_DIR/src":/workspace/src \
     -v "$HF_CACHE_DIR":/workspace/hf_cache \
     -v "/llms:/llms:ro" \
     -e HF_HOME="/workspace/hf_cache" \

@@ -21,6 +21,27 @@ import time
 from transformers import AutoTokenizer
 import wandb
 
+
+def _init_wandb_safe(**kwargs):
+    """
+    Initialize WandB safely. If it fails, mock EVERYTHING so the script never crashes.
+    """
+    try:
+        wandb.init(**kwargs)
+    except Exception as exc:
+        print(f"[WARNING] WandB initialization failed completely: {exc}")
+        print("[INFO] Switching to MOCK mode. No metrics will be logged.")
+        
+        # Monkey-patch ALL commonly used wandb functions to no-ops
+        wandb.log = lambda *args, **kwargs: None
+        wandb.finish = lambda *args, **kwargs: None
+        wandb.define_metric = lambda *args, **kwargs: None
+        wandb.Image = lambda *args, **kwargs: None # Critical for image logging
+        
+        # Ensure os.environ reflects disabled state just in case
+        os.environ["WANDB_MODE"] = "disabled"
+
+
 # ==============================================================================
 # 1. DEPENDENCY MANAGEMENT & DYNAMIC IMPORTS
 # ==============================================================================
@@ -461,7 +482,7 @@ def load_dataframe(path: str) -> pd.DataFrame:
 
 
 def generate_vqa_manifest(output_root: Path, question_col: str = 'question',
-                          answer_col: str = 'answer') -> None:
+                          answer_col: str = 'answer_text') -> None:
     """
     Reads predictions.jsonl and generates a VQA-ready CSV manifest.
 
@@ -867,14 +888,29 @@ def main():
     # --- WandB Initialization ---
     if "WANDB_API_KEY" not in os.environ:
         print("[WARNING] WANDB_API_KEY not found. Runs will be offline.")
-        os.environ["WANDB_MODE"] = "offline"
+        os.environ.setdefault("WANDB_MODE", "offline")
 
-    wandb.init(
-        project="GEMeX-Preprocessing",
-        name=f"{args.mode}-{args.cam_version}",
-        config=vars(args),
-        dir=args.output_dir
+    _wandb_group = (
+        os.environ.get("WANDB_RUN_GROUP")
+        or (Path(os.environ["ORCH_OUTPUT_DIR"]).name if "ORCH_OUTPUT_DIR" in os.environ else None)
+        or f"solo-{time.strftime('%Y%m%d_%H%M%S')}"
     )
+    _init_wandb_safe(
+        project="GEMeX-VQA-Pipeline",
+        name=os.environ.get("WANDB_RUN_NAME") or f"bbox-{args.mode}-{args.cam_version}",
+        group=_wandb_group,
+        job_type="step1-bbox-preproc",
+        tags=["preprocessing", "bbox", args.mode, args.cam_version,
+              Path(args.metadata_file or "unknown").stem],
+        config=vars(args),
+        dir=args.output_dir,
+    )
+    try:
+        wandb.define_metric("processed_images", summary="max")
+        wandb.define_metric("errors", summary="sum")
+        wandb.define_metric("serialization_errors", summary="sum")
+    except Exception:
+        pass
 
     input_root = Path(args.input_dir)
     output_root = Path(args.output_dir)
@@ -1444,6 +1480,36 @@ def main():
             print(f"[WARNING] GPU cleanup error: {e}")
 
         # 5. Finalize WandB telemetry
+        # 5a. Populate run summary table with final aggregate metrics
+        try:
+            _total_time = time.time() - start_time
+            wandb.run.summary.update({
+                "final_processed": processed,
+                "final_failed": failed_count,
+                "success_rate": processed / max(processed + failed_count, 1),
+                "throughput_img_per_sec": processed / _total_time if _total_time > 0 else 0.0,
+                "total_time_sec": _total_time,
+            })
+        except Exception as e:
+            print(f"[WARNING] WandB summary update error: {e}")
+
+        # 5b. Log output artifacts for data lineage tracking
+        try:
+            artifact = wandb.Artifact(
+                name=f"bbox-preproc-{wandb.run.id}",
+                type="pipeline-outputs",
+                description="Bbox preprocessing outputs: predictions.jsonl, vqa_manifest.csv, report.txt",
+            )
+            for _fname in ["predictions.jsonl", "vqa_manifest.csv", "report.txt"]:
+                _p = output_root / _fname
+                if _p.exists():
+                    artifact.add_file(str(_p), name=_fname)
+            wandb.log_artifact(artifact)
+            print("[CLEANUP] WandB artifacts logged.")
+        except Exception as e:
+            print(f"[WARNING] WandB artifact logging error: {e}")
+
+        # 5c. Finish the WandB run
         try:
             wandb.finish()
             print("[CLEANUP] WandB finalized.")

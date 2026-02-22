@@ -162,8 +162,11 @@ def main():
                     stem_id = Path(str(raw_path)).stem
                     
                     if stem_id in local_files_map:
-                        sample['image_path'] = local_files_map[stem_id] 
-                        sample['stem_id'] = stem_id 
+                        resolved_path = local_files_map[stem_id]
+                        if not os.path.exists(resolved_path):
+                            continue
+                        sample['image_path'] = resolved_path
+                        sample['stem_id'] = stem_id
                         sample['original_hf_path'] = raw_path
                         matched_rows.append(sample)
                         

@@ -130,9 +130,11 @@ def main():
                 # Keep all if less than limit
                 sampled_group = group
             
-            # Map the local full path efficiently
+            # Map the local full path and verify it still exists
             local_path = local_files_map[stem_id]
-            
+            if not os.path.exists(local_path):
+                continue
+
             # Convert to dict records and add the resolved path
             records = sampled_group.to_dict('records')
             for r in records:
@@ -143,8 +145,11 @@ def main():
         # Just map the paths
         for idx, row in tqdm(df_gemex.iterrows(), total=len(df_gemex)):
             stem_id = row['stem_id']
+            local_path = local_files_map[stem_id]
+            if not os.path.exists(local_path):
+                continue
             row_dict = row.to_dict()
-            row_dict['resolved_local_path'] = local_files_map[stem_id]
+            row_dict['resolved_local_path'] = local_path
             final_rows.append(row_dict)
 
     # --- 4. GLOBAL SAMPLING (if limit set) ---

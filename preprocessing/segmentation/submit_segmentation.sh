@@ -69,10 +69,38 @@ else
     echo "🔧 Running in SLURM mode - GPU managed by scheduler"
 fi
 
-# Config Files (Container Paths):
-# These paths must exist INSIDE the container (mapped to /workspace/configs).
+# Config Files (Container Paths) - Defaults
 CONF_STEP1="/workspace/configs/step1/gemex/exp_01_vqa.conf"
 CONF_STEP2="/workspace/configs/step2/sam_exp03_medsam3.conf"
+
+# Smart Argument Parsing
+# Iterate through all arguments to identify if they are config overrides
+for arg in "$@"; do
+    if [[ "$arg" == *"step1"* ]]; then
+        # Check if it's already an absolute path (starts with /), otherwise prepend /workspace/
+        if [[ "$arg" != /* ]]; then
+            CONF_STEP1="/workspace/$arg"
+        else
+            CONF_STEP1="$arg"
+        fi
+        echo "🔧 [Override] Step 1 Config: $CONF_STEP1"
+    elif [[ "$arg" == *"step2"* ]]; then
+        if [[ "$arg" != /* ]]; then
+            CONF_STEP2="/workspace/$arg"
+        else
+            CONF_STEP2="$arg"
+        fi
+        echo "🔧 [Override] Step 2 Config: $CONF_STEP2"
+    else
+        # If ambiguous (no 'step1' or 'step2' in name), default to Step 2 override (legacy behavior)
+        echo "⚠️  [Warning] Ambiguous config argument '$arg'. Assuming Step 2."
+        if [[ "$arg" != /* ]]; then
+            CONF_STEP2="/workspace/$arg"
+        else
+            CONF_STEP2="$arg"
+        fi
+    fi
+done
 
 # --- EXECUTION HANDOFF --------------------------------------------------------
 

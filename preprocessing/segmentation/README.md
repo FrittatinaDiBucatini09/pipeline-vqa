@@ -161,6 +161,8 @@ sbatch --export=ALL,LIMIT=5 submit_segmentation.sh
     - `predictions.jsonl` — Bounding box coordinates and metadata
     - `report.txt` — Processing summary
 
+**WandB:** Step 1 logs to the **`GEMeX-VQA-Pipeline`** project under `job_type=step1-localization`, tracking `processed_images`, `errors`, `success_rate`, and `throughput_img_per_sec`. Output artifacts (`predictions.jsonl`, `report.txt`) are logged as versioned WandB artifacts.
+
 ### Step 2 (Segmentation)
 
 -   **`results/step2_masks/`**

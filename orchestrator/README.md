@@ -191,7 +191,7 @@ All stages will run sequentially in a single SLURM job (15h time limit).
 The orchestrator generates a single `meta_job.sh` script and submits it via `sbatch`. The generated script:
 
 1. Requests GPU resources once (`--gpus=nvidia_geforce_rtx_3090:1`)
-2. Sets up global environment variables (`DATA_FILE_OVERRIDE`, `ORCH_OUTPUT_DIR`)
+2. Sets up global environment variables (`DATA_FILE_OVERRIDE`, `ORCH_OUTPUT_DIR`, `WANDB_RUN_GROUP`, `WANDB_MODE`)
 3. Enables fail-fast mode (`set -e`)
 4. Installs an EXIT trap for failure/timeout reporting
 5. Runs each stage sequentially by calling its submit script via `bash`
@@ -242,6 +242,15 @@ orchestrator_runs/
       config_used.txt
     step_03_vqa_judge/
       config_used.txt
+```
+
+The run directory basename (`run_20260215_143022`) is also exported as `WANDB_RUN_GROUP`, so all stages launched within the same meta-job appear grouped together in the WandB UI under project `GEMeX-VQA-Pipeline`. Each stage (`step1-bbox-preproc`, `step1-attn-map`, `step1-localization`, `step1-routing`) shows up as a separate run within the group, with final summary metrics visible in the Runs table.
+
+To override the WandB mode for a submission, set `WANDB_MODE` in your environment before launching the orchestrator:
+
+```bash
+WANDB_MODE=offline ./run_orchestrator.sh   # Log locally, sync later
+WANDB_MODE=disabled ./run_orchestrator.sh  # Disable all WandB logging
 ```
 
 The `report.txt` provides a permanent record of the run:
@@ -337,3 +346,14 @@ Thesis/
 ## Cluster Constraints
 
 All jobs are pinned to the `faretra` node via `#SBATCH -w faretra` due to dataset locality. The meta-job requests GPU resources once and holds them for the entire pipeline run (up to 15 hours).
+
+## WandB Integration
+
+All preprocessing stages log to the unified WandB project **`GEMeX-VQA-Pipeline`**. The meta-job automatically exports:
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `WANDB_RUN_GROUP` | `run_YYYYMMDD_HHMMSS` | Groups all stages of this run together in the WandB UI |
+| `WANDB_MODE` | `online` (default) | Controls logging mode; can be overridden before launching |
+
+**WandB API Key**: Set `WANDB_API_KEY` in the host environment or in the `scripts/.env` file within each preprocessing module. The key is forwarded into Docker containers automatically.

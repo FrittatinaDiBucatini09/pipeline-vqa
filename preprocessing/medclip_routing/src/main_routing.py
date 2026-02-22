@@ -90,6 +90,40 @@ def initialize_models() -> Dict[str, Any]:
 # 3. CORE PROCESSING LOOP
 # ==============================================================================
 
+def _init_wandb_safe(**kwargs):
+    """
+    Initialize WandB safely. If it fails, mock EVERYTHING so the script never crashes.
+    """
+    try:
+        import wandb
+        wandb.init(**kwargs)
+        return wandb
+    except Exception as exc:
+        print(f"[WARNING] WandB initialization failed completely: {exc}")
+        print("[INFO] Switching to MOCK mode. No metrics will be logged.")
+        
+        # Create a mock object that returns None for everything
+        class MockWandB:
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: None
+            
+            # Specific properties/methods if needed
+            run = None
+            config = {}
+            summary = {}
+
+        # Monkey-patch commonly used wnadb functions globally just in case
+        # (though in this script we use the returned wandb_run object mostly)
+        try:
+            import wandb
+            wandb.log = lambda *args, **kwargs: None
+            wandb.finish = lambda *args, **kwargs: None
+            wandb.define_metric = lambda *args, **kwargs: None
+        except ImportError:
+            pass
+            
+        return MockWandB()
+
 def process_dataset(args, models: Dict[str, Any]) -> None:
     """Process the dataset row-by-row with query evaluation and expansion."""
     # Unpack models
@@ -121,16 +155,29 @@ def process_dataset(args, models: Dict[str, Any]) -> None:
     # Initialize WandB if enabled
     wandb_run = None
     if args.wandb_mode != "disabled":
+        _wandb_group = (
+            os.environ.get("WANDB_RUN_GROUP")
+            or (Path(os.environ["ORCH_OUTPUT_DIR"]).name if "ORCH_OUTPUT_DIR" in os.environ else None)
+            or f"solo-{time.strftime('%Y%m%d_%H%M%S')}"
+        )
+        wandb_run = _init_wandb_safe(
+            project="GEMeX-VQA-Pipeline",
+            name=os.environ.get("WANDB_RUN_NAME") or "routing",
+            group=_wandb_group,
+            job_type="step1-routing",
+            tags=["routing", "query-expansion"],
+            config=vars(args),
+            mode=args.wandb_mode,
+        )
         try:
             import wandb
-
-            wandb_run = wandb.init(
-                project="medclip-routing",
-                config=vars(args),
-                mode=args.wandb_mode,
-            )
-        except Exception as e:
-            print(f"[WARNING] WandB init failed: {e}. Continuing without logging.")
+            wandb.define_metric("processed", summary="max")
+            wandb.define_metric("expanded", summary="max")
+            wandb.define_metric("failed", summary="sum")
+            wandb.define_metric("expansion_rate", summary="last")
+            wandb.define_metric("throughput", summary="last")
+        except:
+            pass
 
     print(f"\n[INFO] Starting processing: {total} rows")
     print(f"[INFO] Routing thresholds: entities >= {args.entity_threshold}, words >= {args.word_threshold}")
@@ -227,6 +274,17 @@ def process_dataset(args, models: Dict[str, Any]) -> None:
             "expansion_rate": expanded_count / max(processed, 1),
             "throughput": throughput,
         })
+        try:
+            wandb_run.summary.update({
+                "final_processed": processed,
+                "final_expanded": expanded_count,
+                "final_failed": failed_count,
+                "expansion_rate": expanded_count / max(processed, 1),
+                "throughput_rows_per_sec": throughput,
+                "total_time_sec": elapsed,
+            })
+        except Exception as e:
+            print(f"[WARNING] WandB summary update error: {e}")
         wandb_run.finish()
 
     print(f"\n[INFO] Output written to: {jsonl_path}")

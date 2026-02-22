@@ -10,6 +10,27 @@ cv2.ocl.setUseOpenCL(False)
 from pathlib import Path
 from tqdm import tqdm
 from typing import List, Dict, Any, Tuple
+import wandb
+import time
+
+def _init_wandb_safe(**kwargs):
+    """
+    Initialize WandB safely. If it fails, mock EVERYTHING so the script never crashes.
+    """
+    try:
+        wandb.init(**kwargs)
+    except Exception as exc:
+        print(f"[WARNING] WandB initialization failed completely: {exc}")
+        print("[INFO] Switching to MOCK mode. No metrics will be logged.")
+        
+        # Monkey-patch ALL commonly used wandb functions to no-ops
+        wandb.log = lambda *args, **kwargs: None
+        wandb.finish = lambda *args, **kwargs: None
+        wandb.define_metric = lambda *args, **kwargs: None
+        wandb.Image = lambda *args, **kwargs: None # Critical for image logging
+        
+        # Ensure os.environ reflects disabled state just in case
+        os.environ["WANDB_MODE"] = "disabled"
 
 # Try to import from local utils (module mode) or direct (script mode)
 try:
@@ -240,6 +261,33 @@ def run_inference(args):
     if args.save_overlays:
         os.makedirs(overlay_dir, exist_ok=True)
 
+    # --- WandB Initialization ---
+    if "WANDB_API_KEY" not in os.environ:
+        print("[WARNING] WANDB_API_KEY not found. Runs will be offline.")
+        os.environ.setdefault("WANDB_MODE", "offline")
+
+    _wandb_group = (
+        os.environ.get("WANDB_RUN_GROUP")
+        or (Path(args.output_dir).parent.name if args.output_dir else None)
+        or f"solo-{time.strftime('%Y%m%d_%H%M%S')}"
+    )
+
+    _init_wandb_safe(
+        project="GEMeX-VQA-Pipeline",
+        name=os.environ.get("WANDB_RUN_NAME") or f"segmentation-{Path(args.model_checkpoint).stem}",
+        group=_wandb_group,
+        job_type="step2-segmentation",
+        tags=["segmentation", "medsam", args.scenario],
+        config=vars(args),
+        dir=args.output_dir,
+    )
+    # Define metrics
+    try:
+        wandb.define_metric("processed_images", summary="max")
+        wandb.define_metric("skipped_images", summary="max")
+    except:
+        pass
+
     # 2. Load Data (JSONL)
     print(f"Reading predictions from: {args.input_file}")
     with open(args.input_file, 'r') as f:
@@ -357,7 +405,8 @@ def run_inference(args):
         out_name = f"{filename}_q{q_idx}" if q_idx else filename
             
         mask_path = os.path.join(mask_dir, f"{out_name}_mask.png")
-        save_mask(best_mask, mask_path)
+        if not args.skip_mask_saving:
+            save_mask(best_mask, mask_path)
         
         if args.save_overlays:
             overlay = apply_mask_overlay(image, best_mask)
@@ -379,12 +428,18 @@ def run_inference(args):
             vqa_manifest_records.append({
                 'image_path': f"overlays/{overlay_filename}",
                 'question': item.get('question', item.get('prompt_used', '')),
-                'answer': item.get('answer', ''),
+                'answer': item.get('answer_text', item.get('answer', '')),
             })
 
         processed += 1
+        
+        # Log progress periodically
+        if processed % 10 == 0:
+            wandb.log({"processed_images": processed, "skipped_images": skipped})
 
     print(f"Done. Processed: {processed} | Skipped: {skipped}")
+    wandb.log({"processed_images": processed, "skipped_images": skipped})
+    wandb.finish()
 
     # Generate VQA-ready manifest for downstream pipeline stages
     if vqa_manifest_records:
@@ -417,6 +472,7 @@ def main():
                         help="A=Clean, B=VisualPrompt, C=Adversarial (SAM1/SAM2 only)")
     parser.add_argument('--limit', type=int, help="Process only N samples")
     parser.add_argument('--save_overlays', action='store_true', help="Save visualization overlays")
+    parser.add_argument('--skip_mask_saving', action='store_true', help="Disable saving of binary masks to disk")
     
     # MedSAM3 Text Prompt Options
     parser.add_argument('--text_prompt_mode', type=str, default="question",

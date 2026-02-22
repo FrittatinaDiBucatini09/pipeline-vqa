@@ -5,8 +5,8 @@
 # ==============================================================================
 
 #SBATCH --job-name=vqa_pipeline
-#SBATCH --output=/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_022520/slurm_metajob_%j.out
-#SBATCH --error=/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_022520/slurm_metajob_%j.err
+#SBATCH --output=/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260219_124151/slurm_metajob_%j.out
+#SBATCH --error=/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260219_124151/slurm_metajob_%j.err
 #SBATCH -N 1
 #SBATCH --gpus=nvidia_geforce_rtx_3090:1
 #SBATCH -w faretra
@@ -21,8 +21,11 @@ set -e
 # GLOBAL ENVIRONMENT
 # ==============================================================================
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export ORCH_OUTPUT_DIR="/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_022520"
-export DATA_FILE_OVERRIDE="mimic_ext_stratified_2000_samples.csv"
+export ORCH_OUTPUT_DIR="/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260219_124151"
+# WandB: group all stages of this meta-job under a shared run group in the UI
+export WANDB_RUN_GROUP="$(basename \"/home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260219_124151\")"
+export WANDB_MODE="${WANDB_MODE:-online}"
+export DATA_FILE_OVERRIDE="mimic_ext_stratified_6000_samples.csv"
 
 # ==============================================================================
 # ERROR HANDLING & REPORTING
@@ -63,36 +66,108 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM  # Ensure SIGTERM (from SLURM timeout) triggers EXIT trap
 
+# ==============================================================================
+# GPU DRAIN HELPER
+# ==============================================================================
+# Polls nvidia-smi until GPU VRAM usage drops below DRAIN_THRESHOLD_MIB MiB.
+# Called between every stage so the next Docker container starts with a clean GPU.
+wait_for_gpu_drain() {
+    local DRAIN_THRESHOLD_MIB=${1:-2048}  # default: 2 GiB
+    local TIMEOUT_S=${2:-120}             # default: 2 min
+    local POLL_S=5
+    local ELAPSED=0
+    local GPU_IDX=${CUDA_VISIBLE_DEVICES:-0}
+    echo "[GPU-DRAIN] Waiting for GPU ${GPU_IDX} VRAM to drop below ${DRAIN_THRESHOLD_MIB} MiB (timeout ${TIMEOUT_S}s)..."
+    while true; do
+        USED_MIB=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$GPU_IDX" 2>/dev/null | tr -d " ")
+        if [ -z "$USED_MIB" ]; then
+            echo "[GPU-DRAIN] nvidia-smi unavailable, skipping drain wait."
+            return 0
+        fi
+        if [ "$USED_MIB" -le "$DRAIN_THRESHOLD_MIB" ]; then
+            echo "[GPU-DRAIN] GPU VRAM usage: ${USED_MIB} MiB — OK, proceeding."
+            return 0
+        fi
+        if [ "$ELAPSED" -ge "$TIMEOUT_S" ]; then
+            echo "[GPU-DRAIN] WARNING: GPU VRAM still ${USED_MIB} MiB after ${TIMEOUT_S}s. Proceeding anyway."
+            return 0
+        fi
+        echo "[GPU-DRAIN] GPU VRAM usage: ${USED_MIB} MiB — waiting ${POLL_S}s..."
+        sleep "$POLL_S"
+        ELAPSED=$((ELAPSED + POLL_S))
+    done
+}
+
 echo "============================================================"
 echo "Medical VQA Pipeline - Meta-Job"
-echo "Run directory: /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260217_022520"
-echo "Stages: 3"
-echo "Dataset override: mimic_ext_stratified_2000_samples.csv"
+echo "Run directory: /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260219_124151"
+echo "Stages: 4"
+echo "Dataset override: mimic_ext_stratified_6000_samples.csv"
 echo "============================================================"
 
 # ==============================================================================
-# STEP 1: Preprocessing: Bounding Box
+# STEP 1: Routing: NLP Query Expansion
 # ==============================================================================
-CURRENT_STEP="1 - Preprocessing: Bounding Box"
+CURRENT_STEP="1 - Routing: NLP Query Expansion"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] START: $CURRENT_STEP"
 
-cd "/home/rbalzani/medical-vqa/Thesis/preprocessing/bounding_box"
-bash submit_bbox_preprocessing.sh configs/exp/S_question_T0.45_C_crf_on_P_loose.conf
+cd "/home/rbalzani/medical-vqa/Thesis/preprocessing/medclip_routing"
+bash submit_routing.sh configs/default.conf
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE:  $CURRENT_STEP"
 
+wait_for_gpu_drain
+
 
 # ==============================================================================
-# BRIDGE: Preprocessing (bbox_preproc) -> VQA Generation
+# BRIDGE: Routing (medclip_routing) -> Preprocessing
+# ==============================================================================
+# The routing middleware generates expanded_queries.jsonl with enriched queries.
+# This bridge exports ROUTED_DATASET_OVERRIDE so downstream preprocessing
+# stages consume the expanded dataset.
+
+ROUTING_OUTPUT_DIR="/home/rbalzani/medical-vqa/Thesis/preprocessing/medclip_routing/results"
+
+echo "[BRIDGE] Stage: medclip_routing -> preprocessing"
+echo "[BRIDGE] Checking for expanded queries at $ROUTING_OUTPUT_DIR/expanded_queries.jsonl"
+
+if [ ! -f "$ROUTING_OUTPUT_DIR/expanded_queries.jsonl" ]; then
+    echo "[ERROR] expanded_queries.jsonl not found at $ROUTING_OUTPUT_DIR"
+    echo "[ERROR] The routing stage may have failed to generate the output file."
+    exit 1
+fi
+
+ROUTING_ROWS=$(wc -l < "$ROUTING_OUTPUT_DIR/expanded_queries.jsonl")
+echo "[BRIDGE] Expanded queries found: $ROUTING_ROWS rows"
+
+export ROUTED_DATASET_OVERRIDE="$ROUTING_OUTPUT_DIR/expanded_queries.jsonl"
+echo "[BRIDGE] ROUTED_DATASET_OVERRIDE=$ROUTED_DATASET_OVERRIDE"
+
+# ==============================================================================
+# STEP 2: Preprocessing: Attention Map
+# ==============================================================================
+CURRENT_STEP="2 - Preprocessing: Attention Map"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] START: $CURRENT_STEP"
+
+cd "/home/rbalzani/medical-vqa/Thesis/preprocessing/attention_map"
+bash submit_heatmap_gen.sh configs/exp/best_image.conf
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE:  $CURRENT_STEP"
+
+wait_for_gpu_drain
+
+
+# ==============================================================================
+# BRIDGE: Preprocessing (attn_map) -> VQA Generation
 # ==============================================================================
 # The preprocessing stage generates:
 #   1. Modified/annotated images
 #   2. vqa_manifest.csv mapping new image paths to original questions
 # This bridge wires those artifacts into the VQA generation stage.
 
-PREPROC_OUTPUT_DIR="/home/rbalzani/medical-vqa/Thesis/preprocessing/bounding_box/results"
+PREPROC_OUTPUT_DIR="/home/rbalzani/medical-vqa/Thesis/preprocessing/attention_map/results"
 
-echo "[BRIDGE] Stage: bbox_preproc"
+echo "[BRIDGE] Stage: attn_map"
 echo "[BRIDGE] Checking for VQA manifest at $PREPROC_OUTPUT_DIR/vqa_manifest.csv"
 
 if [ ! -f "$PREPROC_OUTPUT_DIR/vqa_manifest.csv" ]; then
@@ -111,20 +186,22 @@ echo "[BRIDGE] DATA_FILE_OVERRIDE=$DATA_FILE_OVERRIDE"
 echo "[BRIDGE] VQA_IMAGE_PATH=$VQA_IMAGE_PATH"
 
 # ==============================================================================
-# STEP 2: VQA Generation
+# STEP 3: VQA Generation
 # ==============================================================================
-CURRENT_STEP="2 - VQA Generation"
+CURRENT_STEP="3 - VQA Generation"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] START: $CURRENT_STEP"
 
 cd "/home/rbalzani/medical-vqa/Thesis/vqa"
-bash submit_generation.sh configs/generation/hard_coded_gen.conf
+bash submit_generation.sh configs/generation/medgemma_1_5.conf
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE:  $CURRENT_STEP"
 
+wait_for_gpu_drain
+
 # ==============================================================================
-# STEP 3: VQA Evaluation (Judge)
+# STEP 4: VQA Evaluation (Judge)
 # ==============================================================================
-CURRENT_STEP="3 - VQA Evaluation (Judge)"
+CURRENT_STEP="4 - VQA Evaluation (Judge)"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] START: $CURRENT_STEP"
 
 cd "/home/rbalzani/medical-vqa/Thesis/vqa" || exit 1

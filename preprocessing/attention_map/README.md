@@ -61,6 +61,19 @@ Attention_Map/
 └── README.md
 ```
 
+## WandB Monitoring
+
+Each run logs to the **`GEMeX-VQA-Pipeline`** WandB project under `job_type=step1-attn-map`. Tracked metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `processed_images` | Running count of successfully processed images |
+| `errors` | Cumulative error count |
+| `example_heatmap` | Sample heatmap overlay image (logged every 50 batches) |
+| `success_rate`, `throughput_img_per_sec`, `total_time_sec` | Written to run summary on completion |
+
+Output artifacts (`vqa_manifest.csv`, `report.txt`) are logged as versioned WandB artifacts. Set `WANDB_MODE` in the environment to control logging mode (`online` / `offline` / `disabled`).
+
 ## Differences from Bounding Box Pipeline
 
 | Aspect | Bounding Box | Attention Map |

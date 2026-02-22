@@ -29,6 +29,7 @@ References:
 
 import argparse
 import csv
+import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -47,6 +48,7 @@ import utils
 
 DEFAULT_N_SAMPLES = 4000
 DEFAULT_SEED = 42
+DEFAULT_MIMIC_CXR_ROOT = "/datasets/MIMIC-CXR"
 
 # Default input source
 DEFAULT_INPUT_SOURCE = "../vqa/mimic_ext_mapped.csv"
@@ -261,6 +263,12 @@ def parse_args():
         default=DEFAULT_INPUT_SOURCE,
         help=f'Path to input CSV file (default: {DEFAULT_INPUT_SOURCE})'
     )
+    parser.add_argument(
+        '--mimic_cxr_root',
+        type=str,
+        default=DEFAULT_MIMIC_CXR_ROOT,
+        help=f'Root directory of MIMIC-CXR images for path validation (default: {DEFAULT_MIMIC_CXR_ROOT})'
+    )
 
     return parser.parse_args()
 
@@ -304,6 +312,26 @@ def main():
         data = list(reader)
 
     print(f"[INFO] Total samples in dataset: {len(data):,}")
+
+    # Validate image paths exist on disk
+    mimic_root = Path(args.mimic_cxr_root)
+    if mimic_root.exists():
+        print(f"[INFO] Validating image paths against {mimic_root}...")
+        valid_data = []
+        skipped = 0
+        for row in data:
+            img_path = row.get('image_path', '')
+            full_path = mimic_root / img_path
+            if full_path.exists():
+                valid_data.append(row)
+            else:
+                skipped += 1
+        if skipped > 0:
+            print(f"[INFO] Filtered out {skipped} samples with missing images.")
+            print(f"[INFO] Valid samples: {len(valid_data):,}")
+        data = valid_data
+    else:
+        print(f"[WARNING] MIMIC-CXR root not found at {mimic_root}, skipping path validation.")
 
     # Perform stratified sampling
     print(f"[INFO] Creating stratified sample of {LIMIT:,} samples...")

@@ -170,7 +170,9 @@ docker run --rm \
     -v "$OUTPUT_DIR":/workspace/data/output \
     -v "$METADATA_DIR":/workspace/metadata \
     -v "$HF_CACHE_DIR":/workspace/hf_cache \
+    -v "$PHYS_DIR/src":/workspace/src \
     -v "/llms:/llms:ro" \
-    -e HF_HOME="/llms" \
+    -e HF_HOME="/workspace/hf_cache" \
     "$IMAGE_NAME" \
     python3 src/main_routing.py "${CMD_ARGS[@]}"
+

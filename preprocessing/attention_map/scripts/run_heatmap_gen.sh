@@ -34,21 +34,22 @@ HF_CACHE_DIR="$PHYS_DIR/hf_cache"
 # --- CSV Column Mapping ---
 # NOTE: Use stratified sample by default to avoid sampling bias
 # Full dataset: gemex_VQA_mimic_mapped.csv (290K samples)
-# Stratified sample: mimic_ext_sample_4k.csv (4K samples, preserves distribution)
-METADATA_FILENAME="mimic_ext_sample_4k.csv"
+# Stratified sample: mimic_ext_stratified_6000_samples.csv (6K samples, preserves distribution)
+METADATA_FILENAME="mimic_ext_stratified_6000_samples.csv"
 PATH_COLUMN="image_path"
 TEXT_COLUMN="question"
 VIS_REGIONS_COL="visual_regions"
 FALLBACK_PROMPT="medical abnormality"
 
 # --- Hardware & Performance ---
-BATCH_SIZE=16
+BATCH_SIZE=4
 NUM_WORKERS=4
 
 # --- Debugging & Limits ---
 # DEPRECATED: Use stratified sample CSV instead of STOP_AFTER to avoid bias
 # See: scripts/create_stratified_sample.py and SAMPLING_STRATEGY.md
 STOP_AFTER=""
+WANDB_MODE="${WANDB_MODE:-disabled}"   # WandB mode: online, offline, or disabled
 
 # --- Heatmap-Specific Parameters ---
 ALPHA=0.5                   # Blending factor: 0.0 = original, 1.0 = heatmap only
@@ -279,6 +280,10 @@ docker run --rm \
     -e HOME="/workspace" \
     -e MPLCONFIGDIR="/tmp/matplotlib_cache" \
     -e XDG_CACHE_HOME="/tmp/cache" \
+    -e WANDB_MODE="$WANDB_MODE" \
+    -e WANDB_API_KEY="${WANDB_API_KEY:-}" \
+    -e WANDB_RUN_GROUP="${WANDB_RUN_GROUP:-}" \
+    -e WANDB_CACHE_DIR="/tmp/cache/wandb" \
     $DOCKER_ENV_ARGS \
     -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
     -v "/datasets/MIMIC-CXR:/datasets/MIMIC-CXR:ro" \
@@ -287,5 +292,6 @@ docker run --rm \
     -v "$HF_CACHE_DIR":/workspace/hf_cache \
     -v "/llms:/llms:ro" \
     -e HF_HOME="/workspace/hf_cache" \
+    -v "$PHYS_DIR/src":/workspace/src \
     "$IMAGE_NAME" \
     python3 src/generate_heatmaps.py "${CMD_ARGS[@]}"

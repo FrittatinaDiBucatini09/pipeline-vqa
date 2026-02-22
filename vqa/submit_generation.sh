@@ -92,7 +92,7 @@ fi
 # We mount it as a separate read-only volume inside the container.
 
 EXTRA_MOUNTS=""
-DOCKER_VQA_IMAGE_PATH="/workspace"
+DOCKER_VQA_IMAGE_PATH="/datasets/MIMIC-CXR"
 
 if [ -n "$VQA_IMAGE_PATH" ] && [ -d "$VQA_IMAGE_PATH" ] && [ "$VQA_IMAGE_PATH" != "$PHYS_DIR" ]; then
     echo "🔗 [BRIDGE MODE] Preprocessing output detected at: $VQA_IMAGE_PATH"

@@ -68,3 +68,16 @@ All parameters are controlled via `.conf` files in `configs/`. Key parameters:
 | `GEMMA_MAX_NEW_TOKENS` | 128 | Max tokens for query expansion |
 | `STOP_AFTER` | "" | Limit rows for debugging |
 | `METADATA_FILENAME` | gemex_VQA_mimic_mapped.csv | Input dataset filename |
+| `WANDB_MODE` | online | WandB logging mode: `online`, `offline`, or `disabled` |
+
+## WandB Monitoring
+
+This stage logs to the **`GEMeX-VQA-Pipeline`** WandB project under `job_type=step1-routing`. When launched via the orchestrator, the run is automatically grouped with all other stages of the same pipeline run under a shared `WANDB_RUN_GROUP`.
+
+Tracked metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `processed` / `expanded` / `failed` | Running counts (logged every 100 rows) |
+| `expansion_rate` | Fraction of queries that were expanded (written to run summary) |
+| `throughput_rows_per_sec` | Average rows processed per second (written to run summary) |

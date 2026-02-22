@@ -24,31 +24,30 @@ JUDGE_PROMPT = """You are an expert medical evaluator tasked with determining if
 
 **Predicted Answer:** {predicted_answer}
 
-**Task:** Determine if the predicted answer is correct by comparing it to the reference answer. The predicted answer does not need to match the reference answer word-for-word, but it must convey the same medical meaning and factual content.
+**Task:** Determine if the predicted answer is correct by comparing it to the reference answer. The predicted answer does not need to match the reference answer word-for-word, but it must convey the exact same medical meaning, clinical findings, and factual content.
 
 **Evaluation Criteria:**
-1. **Semantic Equivalence**: Does the predicted answer have the same meaning as the reference answer?
-2. **Medical Accuracy**: Is the predicted answer medically correct according to the reference?
-3. **Completeness**: Does the predicted answer address all key points in the reference answer?
-4. **Paraphrasing Tolerance**: Accept valid paraphrases, synonyms, or different phrasings that preserve meaning.
+1. **Semantic Equivalence**: Does the predicted answer have the same clinical meaning as the reference answer? Accept valid medical synonyms, acronyms, and paraphrasing.
+2. **Medical Specificity**: The predicted answer must match the specificity of the reference. Missing crucial modifiers (like laterality, severity, or specific anatomical locations) makes the answer incorrect.
+3. **Completeness & Extraneous Info**: The predicted answer must address the core points of the reference. If the predicted answer includes extra medical claims not present in the reference answer, it should be marked incorrect to penalize hallucinations.
 
 **Examples of Correct Matches:**
-- Reference: "Yes" | Predicted: "Yes, it is visible" → CORRECT
-- Reference: "The image shows pneumonia" | Predicted: "Pneumonia is present in the image" → CORRECT
-- Reference: "No fracture" | Predicted: "There is no fracture" → CORRECT
-- Reference: "Chest X-ray" | Predicted: "CXR" or "Chest radiograph" → CORRECT
+- Reference: "Chest X-ray" | Predicted: "CXR" or "Chest radiograph" → CORRECT (Valid synonyms/acronyms)
+- Reference: "The image shows pneumonia" | Predicted: "Pneumonia is present" → CORRECT (Valid paraphrase)
+- Reference: "No fracture" | Predicted: "There is no evidence of a fracture" → CORRECT (Preserves meaning)
 
 **Examples of Incorrect Matches:**
-- Reference: "Yes" | Predicted: "No" → INCORRECT
-- Reference: "Pneumonia" | Predicted: "Normal lungs" → INCORRECT
-- Reference: "Frontal view" | Predicted: "Lateral view" → INCORRECT
+- Reference: "Yes" | Predicted: "No" → INCORRECT (Direct contradiction)
+- Reference: "Left lower lobe pneumonia" | Predicted: "Pneumonia" → INCORRECT (Missing specific anatomical location/laterality)
+- Reference: "Pleural effusion" | Predicted: "Pleural effusion and pneumothorax" → INCORRECT (Contains extra, unsupported medical claims)
+- Reference: "Frontal view" | Predicted: "Lateral view" → INCORRECT (Factually distinct)
 
 **Your Response:**
-Provide your evaluation in the following format:
+Provide your evaluation in the exact format below. Provide your explanation FIRST, as this helps you reason through the medical comparison before making a final decision.
 
-**VERDICT:** [CORRECT or INCORRECT]
+**EXPLANATION:** [Brief explanation of your decision in 1-2 sentences comparing the medical concepts]
 **CONFIDENCE:** [HIGH, MEDIUM, or LOW]
-**EXPLANATION:** [Brief explanation of your decision in 1-2 sentences]
+**VERDICT:** [CORRECT or INCORRECT]
 
 Respond now:"""
 
@@ -61,43 +60,42 @@ JUDGE_PROMPT_COT = """You are an expert medical evaluator tasked with determinin
 
 **Predicted Answer:** {predicted_answer}
 
-**Task:** Determine if the predicted answer is correct by comparing it to the reference answer. The predicted answer does not need to match the reference answer word-for-word, but it must convey the same medical meaning and factual content.
+**Task:** Determine if the predicted answer is correct by comparing it to the reference answer. The predicted answer does not need to match the reference answer word-for-word, but it must convey the exact same medical meaning, clinical findings, and factual content.
 
 **Evaluation Criteria:**
-1. **Semantic Equivalence**: Does the predicted answer have the same meaning as the reference answer?
-2. **Medical Accuracy**: Is the predicted answer medically correct according to the reference?
-3. **Completeness**: Does the predicted answer address all key points in the reference answer?
-4. **Paraphrasing Tolerance**: Accept valid paraphrases, synonyms, or different phrasings that preserve meaning.
+1. **Semantic Equivalence**: Does the predicted answer have the same clinical meaning as the reference answer? Accept valid medical synonyms, acronyms, and paraphrasing.
+2. **Medical Specificity**: The predicted answer must match the specificity of the reference. Missing crucial modifiers (like laterality, severity, or specific anatomical locations) makes the answer incorrect.
+3. **Completeness & Extraneous Info**: The predicted answer must address the core points of the reference. If the predicted answer includes extra medical claims not present in the reference answer, it should be marked incorrect to penalize hallucinations.
 
 **Examples of Correct Matches:**
-- Reference: "Yes" | Predicted: "Yes, it is visible" → CORRECT
-- Reference: "The image shows pneumonia" | Predicted: "Pneumonia is present in the image" → CORRECT
-- Reference: "No fracture" | Predicted: "There is no fracture" → CORRECT
-- Reference: "Chest X-ray" | Predicted: "CXR" or "Chest radiograph" → CORRECT
+- Reference: "Chest X-ray" | Predicted: "CXR" or "Chest radiograph" → CORRECT (Valid synonyms/acronyms)
+- Reference: "The image shows pneumonia" | Predicted: "Pneumonia is present" → CORRECT (Valid paraphrase)
+- Reference: "No fracture" | Predicted: "There is no evidence of a fracture" → CORRECT (Preserves meaning)
 
 **Examples of Incorrect Matches:**
-- Reference: "Yes" | Predicted: "No" → INCORRECT
-- Reference: "Pneumonia" | Predicted: "Normal lungs" → INCORRECT
-- Reference: "Frontal view" | Predicted: "Lateral view" → INCORRECT
+- Reference: "Yes" | Predicted: "No" → INCORRECT (Direct contradiction)
+- Reference: "Left lower lobe pneumonia" | Predicted: "Pneumonia" → INCORRECT (Missing specific anatomical location/laterality)
+- Reference: "Pleural effusion" | Predicted: "Pleural effusion and pneumothorax" → INCORRECT (Contains extra, unsupported medical claims)
+- Reference: "Frontal view" | Predicted: "Lateral view" → INCORRECT (Factually distinct)
 
 **Instructions:**
-Follow these steps to evaluate:
+Follow these exact steps to evaluate. Write out your reasoning for each step before providing the final verdict.
 
 **STEP 1 - ANALYZE REFERENCE:**
-Identify the key factual points and medical concepts in the reference answer.
+Identify the key factual points, medical concepts, and specific modifiers (e.g., laterality, anatomy) in the reference answer.
 
 **STEP 2 - ANALYZE PREDICTED:**
-Identify the key factual points and medical concepts in the predicted answer.
+Identify the key factual points and medical concepts in the predicted answer. Explicitly note any missing modifiers or extra medical claims not found in the reference.
 
 **STEP 3 - COMPARE:**
-Compare the two answers for semantic equivalence, considering paraphrasing and synonyms.
+Compare the two answers based on semantic equivalence, medical specificity, and extraneous information.
 
-**STEP 4 - VERDICT:**
-Provide your final verdict in this exact format:
+**STEP 4 - FINAL RESPONSE:**
+Provide your final evaluation in this exact format at the very end of your response:
 
-**VERDICT:** [CORRECT or INCORRECT]
+**EXPLANATION:** [Brief summary of your findings from steps 1-3 in 1-2 sentences]
 **CONFIDENCE:** [HIGH, MEDIUM, or LOW]
-**EXPLANATION:** [Brief explanation of your decision in 1-2 sentences]
+**VERDICT:** [CORRECT or INCORRECT]
 
 Respond now:"""
 
