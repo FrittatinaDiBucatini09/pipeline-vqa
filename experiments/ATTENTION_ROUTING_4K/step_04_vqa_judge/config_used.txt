@@ -1,1 +1,0 @@
-configs/judge/hard_coded_judge.conf

@@ -1,1 +1,0 @@
-mimic_ext_stratified_6000_samples.csv
