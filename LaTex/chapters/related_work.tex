@@ -1,0 +1,505 @@
+\chapter{Related Work}
+This chapter reviews the evolution and current state-of-the-art in multimodal medical image analysis, establishing the theoretical context for the proposed Region of Interest (RoI) extraction pipeline. While recent years have witnessed a surge in the capabilities of Multimodal Large Language Models (MLLMs), their direct application to clinical diagnostics is frequently bottlenecked by a lack of interpretability, data inefficiency, and an over-reliance on computationally expensive, end-to-end architectures \cite{arxiv-mllms-medicine, arxiv-tinyllavamed}. To contextualize the contributions of this thesis, the following sections critically examine the trajectory of Medical Visual Question Answering (VQA), the emerging necessity of explicit Image Prompting, and the recent shift toward text-driven, zero-shot medical image segmentation. By identifying the structural limitations of existing holistic models, this review justifies the necessity of the modular, mathematically grounded approach detailed in Chapter \ref{chap:3}.
+
+\section{Medical Visual Question Answering (VQA)}
+
+Medical Visual Question Answering (VQA) lies at the complex intersection of computer vision and natural language processing. The primary objective of a Medical VQA system is to process a clinical image (such as a Chest X-Ray or MRI) alongside a natural language query, and subsequently generate an accurate, clinically relevant diagnostic answer \cite{arxiv-medvqa-review}.
+Historically, the dominant paradigm in Medical VQA has relied on monolithic, end-to-end deep learning architectures \cite{arxiv-medvqa-review}. Formally, early VQA models can be defined as learning a mapping from an image $\mathbf{I}$ and a question sequence $q$ to an answer space $\mathcal{A}$ \cite{antol2015vqa}. The visual and textual features are independently extracted via specific encoders $f_{\text{vis}}$ and $f_{\text{text}}$, producing embedding vectors $\mathbf{v}$ and $\mathbf{t}$ \cite{benyounes2017mutan}:
+\begin{equation}
+\mathbf{v} = f_{\text{vis}}(\mathbf{I}; \theta_V) \in \mathbb{R}^{d_v}, \quad \mathbf{t} = f_{\text{text}}(q; \theta_T) \in \mathbb{R}^{d_q}
+\end{equation}
+
+where:
+\begin{itemize}
+\item $\mathbf{v} \in \mathbb{R}^{d_v}, \mathbf{t} \in \mathbb{R}^{d_q}$ represent the extracted visual and textual embedding vectors, respectively
+\item $f_{\text{vis}}, f_{\text{text}}$ represent the visual and textual encoder functions
+\item $\mathbf{I}, q$ represent the input clinical image and the natural language question sequence, respectively
+\item $\theta_V, \theta_T$ represent the learnable parameters of the visual and textual encoders
+\item $d_v, d_q$ represent the dimensionalities of the continuous visual and textual representation spaces
+\end{itemize}
+
+These representations are subsequently fused using a multimodal fusion function $\phi$ (e.g., element-wise product, concatenation, or bilinear pooling) to compute the probability of a specific answer $a \in \mathcal{A}$ \cite{wu2017vqa-survey}. To correctly yield a valid probability distribution over the entire answer space, this is normalized via the softmax function\cite{benyounes2017mutan}:
+\begin{equation}
+P(a|\mathbf{I},q) = \frac{\exp(w_{a}^{\top}\phi(\mathbf{v},\mathbf{t}) + b_{a})}{\sum_{a'\in\mathcal{A}} \exp(w_{a'}^{\top}\phi(\mathbf{v},\mathbf{t}) + b_{a'})}
+\end{equation}
+
+where:
+\begin{itemize}
+\item $P(a|\mathbf{I},q) \in [0,1]$ represents the conditional probability of predicting answer $a$ given the clinical image $\mathbf{I}$ and question sequence $q$
+\item $a \in \mathcal{A}$ represents a specific target answer from the predefined answer space $\mathcal{A}$
+\item $w_{a}$ represents the learnable weight vector associated with answer $a$ in the classification layer
+\item $b_{a} \in \mathbb{R}$ represents the learnable scalar bias term associated with answer $a$
+\item $\phi$ represents the multimodal fusion function mapping the visual and textual embeddings into a joint representation space
+\item $\mathbf{v}, \mathbf{t}$ represent the extracted continuous visual and textual embedding vectors, respectively
+\item $a'$ acts as a dummy variable iterating over all possible answers in the answer space $\mathcal{A}$ to compute the softmax normalization denominator
+\end{itemize}
+
+Conversely, the recent paradigm shift toward Multimodal Large Language Models (MLLMs) models the task as a conditional auto-regressive generation \cite{yin2024mllm-survey}. The image $\mathbf{I}$ is encoded into a sequence of $K$ visual tokens $\mathbf{Z} = \{z_1, z_2, \dots, z_K\}$. Similarly, the text query $q$ is tokenized into a sequence $\mathbf{X} = \{x_1, \dots, x_M\}$ \cite{alayrac2022flamingo}. These sequences are concatenated to directly maximize the likelihood of the target answer sequence $\mathbf{y} = (y_1, \dots, y_N)$ \cite{liu2023llava}:
+\begin{equation}
+P(\mathbf{y} | \mathbf{I}, q) = \prod_{t=1}^{N} P(y_t | y_{<t}, \mathbf{Z}, \mathbf{X}; \theta_{\text{MLLM}})
+\end{equation}
+
+where:
+\begin{itemize}
+\item $P(\mathbf{y} | \mathbf{I}, q) \in [0,1]$ represents the conditional likelihood of generating the full target answer sequence $\mathbf{y}$ given the input clinical image $\mathbf{I}$ and the textual query $q$
+\item $N \in \mathbb{N}$ represents the total number of tokens in the target answer sequence
+\item $y_t$ represents the $t$-th generated token in the sequence, where $t \in \{1, \dots, N\}$
+\item $y_{<t}$ represents the autoregressive context comprising all previously generated tokens $(y_1, \dots, y_{t-1})$
+\item $\mathbf{Z} = \{z_1, \dots, z_K\}$ represents the sequence of $K$ encoded visual tokens extracted from the image
+\item $\mathbf{X} = \{x_1, \dots, x_M\}$ represents the sequence of $M$ tokenized textual query tokens
+\item $\theta_{\text{MLLM}}$ represents the learnable parameters of the Multimodal Large Language Model
+\end{itemize}
+
+Despite achieving impressive quantitative benchmarks on standardized datasets, the translation of these end-to-end models into real-world clinical workflows has revealed critical structural limitations \cite{gao2024mllm-health}:
+\begin{itemize}
+\item \textbf{The Black-Box Dilemma and Clinical Trust:} End-to-end MLLMs perform multimodal fusion across billions of parameters, obscuring the reasoning process. In a clinical setting, an answer without verifiable visual evidence is heavily scrutinized. When a model predicts a pathology, it is often impossible to mathematically prove where the model was looking, severely compromising clinical interpretability \cite{lin2023medical-mllm-survey}.
+\item \textbf{Data Inefficiency and Cross-Domain Generalization:} Training monolithic VQA models requires vast, paired datasets of annotated medical images and textual Q\&A pairs. Because medical data is inherently scarce, heavily regulated, and expensive to annotate, these models frequently suffer from poor data efficiency and fail to generalize across different hospital domains or specific pathological sub-types \cite{he2024medical-vqa-robustness}.
+\item \textbf{Visual Hallucination:} Without explicit visual boundaries, MLLMs are prone to "hallucinating" findings based on textual biases learned during pre-training rather than grounding their answers in the actual radiological geometry of the provided scan \cite{ji2023hallucination-survey}.
+\end{itemize}
+
+Mathematically, transitioning to a modular approach alters the objective function. Instead of blindly conditioning on the entire image $\mathbf{I}$, the pipeline introduces an explicit Region of Interest (RoI) extraction function $g(\mathbf{I}, q) \rightarrow \mathcal{R}$. The generation is formally defined as an expectation over the extracted regions \cite{chen2024rllava}:
+\begin{equation}
+P(\mathbf{y} | \mathbf{I}, q) = \mathbb{E}_{\mathcal{R} \sim g(\cdot|\mathbf{I},q)} \left[ \prod_{t=1}^{N} P(y_{t}|y_{<t},\mathcal{R},q) \right]
+\end{equation}
+
+where:
+\begin{itemize}
+\item $P(\mathbf{y} | \mathbf{I}, q) \in [0,1]$ represents the overall conditional likelihood of generating the diagnostic answer sequence $\mathbf{y}$ given the full clinical image $\mathbf{I}$ and the text query $q$
+\item $\mathbb{E}_{\mathcal{R} \sim g(\cdot|\mathbf{I},q)}$ represents the expected value computed over the distribution of Regions of Interest $\mathcal{R}$ sampled from the extraction function $g$
+\item $g$ represents the explicit Region of Interest (RoI) extraction function mapping the image and text to a targeted visual evidence region
+\item $\mathcal{R}$ represents the extracted visual evidence or Region of Interest
+\item $N \in \mathbb{N}$ represents the total number of tokens in the generated answer sequence
+\item $y_t$ represents the $t$-th generated token in the sequence
+\item $y_{<t}$ represents the autoregressive context comprising all previously generated tokens $(y_1, \dots, y_{t-1})$
+\item $P(y_{t}|y_{<t},\mathcal{R},q) \in [0,1]$ represents the conditional probability of generating the next token $y_t$ explicitly grounded on the isolated visual evidence $\mathcal{R}$ and the textual query $q$
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+% \resizebox costringe il diagramma a stare dentro i margini della pagina
+\resizebox{\textwidth}{!}{% 
+\begin{tikzpicture}[
+node distance=1.5cm and 2cm,
+box/.style={draw, rectangle, rounded corners, align=center, minimum height=1cm, minimum width=2.5cm, fill=blue!5},
+arrow/.style={-{Stealth}, thick},
+% fill=white crea uno sfondo pulito dietro il testo per non farlo accavallare alla linea
+label/.style={font=\small\itshape, fill=white, inner sep=2pt} 
+]
+
+% --- TOP ROW: Monolithic Approach ---
+\node (img1) [box] {Medical\\Image $\mathbf{I}$};
+\node (text1) [box, below=0.8cm of img1] {Text\\Query $q$};
+
+% Centriamo il MLLM verticalmente rispetto all'immagine e al testo
+\coordinate (mid1) at ($(img1.east)!0.5!(text1.east)$);
+\node (mllm1) [box, right=3cm of mid1, fill=red!10] {Monolithic MLLM\\(Black-Box)};
+
+\node (out1) [box, right=3cm of mllm1] {Diagnostic\\Answer $\mathbf{y}$};
+
+% Routing sfalsato: entra a 160° (sopra) e 200° (sotto) per evitare sovrapposizioni
+\draw [arrow] (img1.east) -- ++(1.5,0) |- (mllm1.160);
+\draw [arrow] (text1.east) -- ++(1.5,0) |- (mllm1.200);
+\draw [arrow] (mllm1.east) -- node[above, label] {$P(\mathbf{y}|\mathbf{I},q)$} (out1.west);
+
+% Label for top row
+\node[anchor=south west, font=\bfseries] at ([yshift=0.5cm]img1.north west) {(a) End-to-End MLLM Approach};
+
+
+% --- BOTTOM ROW: Modular Pipeline (Proposed) ---
+\node (img2) [box, below=3.5cm of img1] {Medical\\Image $\mathbf{I}$};
+\node (text2) [box, below=0.8cm of img2] {Text\\Query $q$};
+
+\node (extractor) [box, right=1.5cm of img2, fill=green!10] {Visual Grounding\\(RoI Extractor)};
+
+\coordinate (mid2) at ($(img2.east)!0.5!(text2.east)$);
+\node (mllm2) [box, right=6.5cm of mid2, fill=blue!10] {MLLM\\(Language Gen.)};
+
+\node (out2) [box, right=3cm of mllm2] {Diagnostic\\Answer $\mathbf{y}$};
+
+% Routing delle frecce
+\draw [arrow] (img2.east) -- (extractor.west);
+
+% Il testo va all'estrattore entrando nell'angolo in basso a sinistra (200°)
+\draw [arrow] (text2.east) -- ++(0.5,0) |- (extractor.200); 
+
+% L'evidenza visiva va al MLLM entrando in alto a sinistra
+\draw [arrow] (extractor.east) -- ++(1,0) |- node[pos=0.75, above, label] {Evidence $\mathcal{R}$} (mllm2.160);
+
+% Il testo va anche al MLLM entrando in basso a sinistra
+\draw [arrow] (text2.east) -- ++(0.5,0) |- (mllm2.200); 
+
+% Output
+\draw [arrow] (mllm2.east) -- node[above, label] {$P(\mathbf{y}|\mathcal{R},q)$} (out2.west);
+
+% Label for bottom row
+\node[anchor=south west, font=\bfseries] at ([yshift=0.5cm]img2.north west) {(b) Decoupled Modular Pipeline};
+
+\end{tikzpicture}
+} % <-- Fine resizebox
+\caption{Comparison between (a) the traditional monolithic architecture prone to hallucinations and poor interpretability, and (b) the proposed decoupled architecture that explicitly grounds the generation on extracted Regions of Interest ($\mathcal{R}$).}
+\label{fig:vqa_paradigms}
+\end{figure}
+
+Assuming the RoI extractor $g$ yields a highly confident, deterministic visual evidence region $\mathcal{R}$, we can approximate this expectation \cite{chen2024rllava, anderson2018bottom-up}. The generative process is thus strictly conditioned on $\mathcal{R}$:
+\begin{equation}
+P(\mathbf{y} | \mathbf{I}, q) \approx \prod_{t=1}^{N} P(y_t | y_{<t}, \mathbf{Z}, \mathbf{X}; \theta_{\text{MLLM}})
+\end{equation}
+
+where:
+\begin{itemize}
+\item $P(\mathbf{y} | \mathbf{I}, q) \in [0,1]$ represents the approximated conditional likelihood of generating the diagnostic answer sequence $\mathbf{y}$ given the input clinical image $\mathbf{I}$ and the text query $q$
+\item $N \in \mathbb{N}$ represents the total number of tokens in the target answer sequence
+\item $y_t$ represents the $t$-th generated token in the sequence, where $t \in \{1, \dots, N\}$
+\item $y_{<t}$ represents the autoregressive context comprising all previously generated tokens $(y_1, \dots, y_{t-1})$
+\item $\mathbf{Z}$ represents the sequence of encoded visual tokens, now strictly constrained to the extracted deterministic visual evidence region $\mathcal{R}$
+\item $\mathbf{X}$ represents the sequence of tokenized textual query tokens
+\item $\theta_{\text{MLLM}}$ represents the learnable parameters of the Multimodal Large Language Model
+\end{itemize}
+
+This formulation bounds the hypothesis space of the MLLM, effectively anchoring the textual generation to verified radiological geometry rather than spurious latent correlations \cite{gupta2023visprog}. These limitations highlight a pressing need to decouple the visual grounding process from the language generation process. Rather than relying on a single network to simultaneously localize a pathology and reason about it, the state-of-the-art is gradually recognizing the value of modular pipelines \cite{lu2023chameleon}. By extracting targeted visual evidence before invoking the MLLM, researchers can systematically reduce hallucinations and introduce rigorous mathematical validation into the diagnostic loop \cite{yang2024modular-med-mllm}.
+
+\section{Image Prompting and Region of Interest (RoI) Extraction}
+
+As established in the previous section, the transition from monolithic architectures to decoupled, modular pipelines necessitates a robust mechanism for isolating clinical evidence prior to language generation. This requirement has driven the adoption of explicit Image Prompting and Region of Interest (RoI) extraction techniques within the medical domain.
+
+Unlike standard textual prompting, where a Large Language Model is guided solely by natural language instructions, image prompting introduces spatial constraints directly into the visual representation space \cite{bahng2022visual-prompting}. By forcing the model to attend to a specific geometrical subspace of the image, the visual signal-to-noise ratio is maximized, significantly mitigating the risk of visual hallucination \cite{shtedritski2023what-is-prompt}.
+
+\subsection{Mathematical Formulation of Visual Prompting}
+
+In a standard end-to-end Multimodal Large Language Model (MLLM), the entire input image $\mathbf{I}\in\mathbb{R}^{C\times H\times W}$ is processed by a visual encoder to produce a sequence of visual tokens $Z$. In a visually prompted architecture, we introduce a spatial prompt, which can be mathematically generalized as a mask $M\in[0,1]^{H\times W}$ \cite{wu2023visual-clues}.
+Depending on the specific extraction technique, this mask can represent a hard spatial crop (bounding box), a pixel-level binary mask, or a continuous attention map (soft RoI). The explicit visual evidence $\mathcal{R}$ is derived by spatially modulating the input image or its corresponding feature map $\mathbf{F}\in\mathbb{R}^{d_{v}\times H^{\prime}\times W^{\prime}}$ extracted at an intermediate layer of the visual encoder \cite{zou2024seem}:
+
+To properly map the spatial dimensions, we first introduce a downsampling function to align the mask with the latent spatial resolution, producing $M'\in[0,1]^{H'\times W'}$:
+\begin{equation}
+M' = \text{Downsample}(M)
+\end{equation}
+where:
+\begin{itemize}
+    \item $M' \in [0,1]^{H'\times W'}$ represents the downsampled spatial mask aligned with the latent spatial resolution
+    \item $\text{Downsample}$ represents the spatial downsampling function applied to the mask
+\end{itemize}
+
+The modulation is then computed by broadcasting $M'$ across the $d_v$ channel dimensions via the Hadamard (element-wise) product:
+\begin{equation}
+\mathbf{F}_{\mathcal{R}}^{(c, i, j)} = \mathbf{F}^{(c, i, j)} \cdot M'^{(i, j)}, \quad \forall c \in \{1, \dots, d_v\}
+\end{equation}
+where:
+\begin{itemize}
+\item $M \in [0,1]^{H\times W}$ represents the original spatial mask or spatial prompt prior to downsampling
+\item $\mathbf{F}_{\mathcal{R}}^{(c, i, j)}$ represents the scalar activation at channel $c$ and spatial coordinates $(i, j)$ of the spatially modulated feature map $\mathbf{F}_{\mathcal{R}}$
+\item $\mathbf{F}^{(c, i, j)}$ represents the scalar activation at channel $c$ and spatial coordinates $(i, j)$ of the input intermediate visual feature map $\mathbf{F} \in \mathbb{R}^{d_v \times H' \times W'}$
+\item $M'^{(i, j)}$ represents the scalar value of the downsampled mask at spatial coordinates $(i, j)$
+\item $c \in \{1, \dots, d_v\}$ represents the channel index iterating over the $d_v$ channel dimensions
+\item $i, j$ represent the discrete spatial coordinate indices over the height $H'$ and width $W'$ of the latent feature map
+\end{itemize}
+
+The resulting masked feature map $\mathbf{F}_{\mathcal{R}}$ ensures that the contextualized token representations passed to the MLLM encode strictly the geometric region containing the pathology, nullifying the background noise \cite{li2024red-circle-prompt}.
+
+%\begin{figure}[H]
+ % \centering
+% \includegraphics[width=0.8\textwidth]{images/placeholder_image_prompting.png}
+%\caption{Conceptual comparison between holistic image encoding and visually prompted encoding using a spatial mask $M$. The application of the mask restricts the receptive field of the subsequent visual tokens to the explicitly defined Region of Interest.}
+%\label{fig:image_prompting_concept}
+%\end{figure}
+
+\subsection{Evolution of RoI Extraction Paradigms}
+
+The extraction of the spatial mask $M$ has evolved through several distinct paradigms, balancing annotation cost with spatial precision:
+
+\begin{itemize}
+\item \textbf{Bounding Box Detection:} Historically dominated by architectures like Faster R-CNN \cite{ren2015faster-rcnn}, this approach defines the RoI via a set of coordinates $B=[x_{min},y_{min},x_{max},y_{max}]$. The mask $M$ is simply an indicator function over discrete pixel coordinates $(i,j)$:
+
+$$\mathbf{M}(i,j) = \begin{cases} 1, & \text{if } x_{\min} \le i \le x_{\max} \text{ and } y_{\min} \le j \le y_{\max} \\ 0, & \text{otherwise} \end{cases}$$
+While effective, bounding boxes inevitably encapsulate healthy background tissue alongside the pathology, diluting the visual prompt \cite{anderson2018bottom-up}.
+
+\item \textbf{Weakly Supervised Localization:} To bridge the gap between image-level textual labels and pixel-level masks, Weakly Supervised Object Localization (WSOL) techniques have emerged. By leveraging the gradients or activation weights of a pre-trained classification model, it is possible to generate Class Activation Maps (CAMs) that highlight discriminative regions without requiring dense pixel annotations \cite{zhou2016cam}. This continuous heatmap is formally bounded as:
+\begin{equation}
+\mathbf{A} \in [0,1]^{H \times W}
+\end{equation}
+
+where:
+\begin{itemize}
+\item $\mathbf{A} \in [0,1]^{H \times W}$ represents the continuous visual heatmap or Class Activation Map generated via Weakly Supervised Object Localization
+\item $H, W \in \mathbb{N}$ represent the spatial height and width dimensions of the continuous heatmap
+\end{itemize}
+
+\item \textbf{Semantic and Instance Segmentation:} Utilizing architectures such as U-Net \cite{ronneberger2015unet}, this paradigm computes a pixel-wise probability distribution. The resulting mask $\mathbf{M}_{\text{seg}}$ mathematically represents the most probable anatomical class $c$ from a predefined set $\mathcal{C}$ for each pixel, accurately tracing the morphological boundaries of the target structure:
+\begin{equation}
+\mathbf{M}_{\text{seg}}(i,j) = \arg\max_{c \in \mathcal{C}} P(y_{i,j} = c | \mathbf{I})
+\end{equation}
+
+where:
+\begin{itemize}
+\item $\mathbf{M}_{\text{seg}}(i,j)$ represents the resulting semantic segmentation mask evaluated at spatial pixel coordinates $(i,j)$, indicating the most probable anatomical class
+\item $c \in \mathcal{C}$ represents a specific anatomical class from the predefined set of all possible classes $\mathcal{C}$
+\item $P(y_{i,j} = c | \mathbf{I}) \in [0,1]$ represents the pixel-wise conditional probability that the true label $y_{i,j}$ for the pixel at coordinates $(i,j)$ is class $c$, given the input image $\mathbf{I}$ 
+\item $y_{i,j}$ represents the target anatomical label for the pixel at coordinates $(i,j)$
+\item $\mathbf{I}$ represents the full input medical image
+\item $i, j$ represent the discrete spatial pixel coordinates across the image height and width
+\end{itemize}
+
+However, training these models requires exhaustive, pixel-perfect ground-truth annotations, which are notoriously expensive and scarce in the medical domain \cite{tajbakhsh2020medical-segmentation-survey}.
+
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+
+% Immagine (a)
+\begin{subfigure}[b]{0.32\textwidth}
+\centering
+\includegraphics[width=\textwidth]{img2/lung_bbox_2.png} % Sostituisci con il tuo file
+\caption{} 
+\label{fig:roi_a}
+\end{subfigure}
+\hfill % Crea uno spazio flessibile tra le immagini
+% Immagine (b)
+\begin{subfigure}[b]{0.32\textwidth}
+\centering
+\includegraphics[width=\textwidth]{img2/Activation_Map.png} % Sostituisci con il tuo file
+\caption{}
+\label{fig:roi_c}
+\end{subfigure}
+\hfill
+% Immagine (c)
+\begin{subfigure}[b]{0.32\textwidth}
+\centering
+\includegraphics[width=\textwidth]{img2/lung_seg_2.png}% Sostituisci con il tuo file
+\caption{}
+\label{fig:roi_b}
+\end{subfigure}
+\hfill
+\caption{Visual comparison of RoI extraction techniques: (a) Bounding Box Detection, (b) Weakly Supervised Activation Maps, and (c) Dense Semantic Segmentation.}
+\label{fig:roi_extraction_methods}
+\end{figure}\
+
+\subsection{Towards Zero-Shot and Foundation Models}
+
+Recent advancements have introduced promptable visual foundation models capable of zero-shot segmentation \cite{kirillov2023sam}. Instead of training a specific decoder for every anatomical structure, these models learn a generalized notion of "objectness". This represents a fundamental mathematical shift from closed-set classification spaces to open-vocabulary inference \cite{zou2024seem}.
+
+By providing a sparse prompt such as a single coordinate point $(x_{p},y_{p})$, a rough bounding box, or even a localized text embedding, the foundation model calculates a high-fidelity mask $M$ \cite{kirillov2023sam}. This shift is particularly critical for Medical VQA. If a weakly supervised method can identify the rough center of a pathological finding, a promptable foundation model can dynamically extrapolate the exact geometric boundaries \cite{ma2023medsam}. This synergistic pipeline allows for the automated extraction of highly precise visual evidence $\mathcal{R}$, fulfilling the requirements of the decoupled architecture without demanding massive datasets of dense manual annotations \cite{wu2023medical-sam-survey}.
+
+
+
+\subsection{State-of-the-Art Zero-Shot Medical Image Segmentation Pipeline}
+\label{sec:sota_pipeline}
+To overcome the inherent limitations of monolithic Multimodal Large Language Models (MLLMs), such as hallucination and data inefficiency, recent paradigm shifts in Medical Visual Question Answering (VQA) have advocated for decoupled, modular architectures. This section details a highly rigorous, state-of-the-art visual grounding methodology that serves as the theoretical inspiration for this thesis's pipeline.
+The baseline framework leverages a text-driven, zero-shot segmentation approach cascading foundational models and mathematical post-processing techniques\cite{medclipsam}. Initially, this was established in the MedCLIP-SAM framework utilizing BiomedCLIP, Class Activation Mapping (specifically gScoreCAM), Conditional Random Fields (CRF), and the Segment Anything Model (SAM). However, recent advancements have evolved this architecture—specifically within the MedCLIP-SAMv2 framework—replacing traditional CAM and CRF with the Multi-modal Information Bottleneck (M2IB) and Connected Component Analysis (CCA) to achieve superior and continuous visual saliency map generation \cite{medclipsamv2}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=1\linewidth]{img2/pipeline_MEDSAM_.png}
+\caption{Architectural overview of the text-driven, zero-shot medical image segmentation pipeline \cite{medclipsam}. The cascade progresses from multimodal latent alignment (BiomedCLIP) to advanced localization (CAM/M2IB), boundary refinement, and finally high-fidelity mask extraction (SAM/MedSAM).}
+\label{fig:pipeline_architecture}
+\end{figure}
+
+\subsubsection{Vision-Language Alignment via MedCLIP}
+\label{sec:medclip}
+
+The foundation of text-driven visual grounding relies on establishing a shared semantic space between unstructured clinical text and high-dimensional medical images \cite{medclipsam}. The MedCLIP-SAM framework employs the BiomedCLIP model, projecting extracted features into vectors of the same dimension, $\mathbf{I}_{p,i}$ for images and $\mathbf{T}_{p,i}$for texts.
+In traditional CLIP training with the InfoNCE loss, the negative-positive-coupling (NPC) effect can reduce learning efficiency, especially with smaller batch sizes. To address this, the pipeline employs the Decoupled Hard Negative Noise Contrastive Estimation (DHN-NCE) loss \cite{medclipsam}. This loss combines InfoNCE with hard negative sampling to emphasize "close samples," and incorporates decoupled contrastive learning by removing the positive term in the denominator.
+Applying hardness weights, the resulting DHN-NCE loss function, $\mathcal{L}_{DHN-NCE}$, employs weighting functions ($\mathcal{W}_{\mathbf{I}_{p,i}\mathbf{T}_{p,j}}^{v \rightarrow t}$, $\mathcal{W}_{\mathbf{T}_{p,i}\mathbf{I}_{p,j}}^{t \rightarrow v}$) to increase the penalty for negative samples that are close to the anchor, using image-to-text and text-to-image hardness parameters $\beta_1, \beta_2 \ge 0$.
+The directional decoupled losses are defined as \cite{medclipsam}:
+\begin{equation}
+\mathcal{L}^{v \rightarrow t} = - \sum_{i=1}^{B} \frac{\mathbf{I}_{p,i}\mathbf{T}_{p,i}^\top}{\tau} + \sum_{i=1}^{B} \log \left( \sum_{j \neq i} e^{\mathbf{I}_{p,i}\mathbf{T}_{p,j}^\top / \tau} \mathcal{W}_{\mathbf{I}_{p,i}\mathbf{T}_{p,j}}^{v \rightarrow t} \right)
+\end{equation}
+\begin{equation}
+\mathcal{L}^{t \rightarrow v} = - \sum_{i=1}^{B} \frac{\mathbf{T}_{p,i}\mathbf{I}_{p,i}^\top}{\tau} + \sum_{i=1}^{B} \log \left( \sum_{j \neq i} e^{\mathbf{T}_{p,i}\mathbf{I}_{p,j}^\top / \tau} \mathcal{W}_{\mathbf{T}_{p,i}\mathbf{I}_{p,j}}^{t \rightarrow v} \right)
+\end{equation}
+
+where:
+\begin{itemize}
+\item $\mathcal{L}^{v \rightarrow t}, \mathcal{L}^{t \rightarrow v} \in \mathbb{R}$ represent the directional decoupled image-to-text and text-to-image contrastive losses, respectively
+\item $B \in \mathbb{N}$ represents the total number of samples within the current mini-batch
+\item $i \in \{1, \dots, B\}$ represents the index of the anchor sample within the batch
+\item $j \in \{1, \dots, B\}$ represents the index of the negative contrastive samples, such that $j \neq i$
+\item $\mathbf{I}_{p,i}, \mathbf{I}_{p,j} \in \mathbb{R}^{d}$ represent the projected latent feature vectors for the $i$-th (anchor) and $j$-th (negative) medical images, mapped to a shared semantic space of dimension $d$
+\item $\mathbf{T}_{p,i}, \mathbf{T}_{p,j} \in \mathbb{R}^{d}$ represent the projected latent feature vectors for the $i$-th (positive) and $j$-th (negative) unstructured clinical texts
+\item $\tau \in \mathbb{R}^+$ represents the scaling temperature parameter
+\item $\mathcal{W}_{\mathbf{I}_{p,i}\mathbf{T}_{p,j}}^{v \rightarrow t} \in \mathbb{R}^+$ represents the explicit hardness weighting function for the image-to-text direction, amplifying the penalty for hard negatives closer to the anchor
+\item $\mathcal{W}_{\mathbf{T}_{p,i}\mathbf{I}_{p,j}}^{t \rightarrow v} \in \mathbb{R}^+$ represents the explicit hardness weighting function for the text-to-image direction
+\item $\mathbf{I}_{p,i}\mathbf{T}_{p,i}^\top, \mathbf{T}_{p,i}\mathbf{I}_{p,i}^\top \in \mathbb{R}$ represent the dot products (similarity scores) between the matched positive image-text pairs
+\item $\mathbf{I}_{p,i}\mathbf{T}_{p,j}^\top, \mathbf{T}_{p,i}\mathbf{I}_{p,j}^\top \in \mathbb{R}$ represent the dot products (similarity scores) between the unmatched negative image-text pairs
+\end{itemize}
+
+The total DHN-NCE loss is the sum of these bi-directional components:
+\begin{equation}
+\mathcal{L}_{DHN-NCE} = \mathcal{L}^{v \rightarrow t} + \mathcal{L}^{t \rightarrow v}
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathcal{L}_{DHN-NCE} \in \mathbb{R}$ represents the total Decoupled Hard Negative Noise Contrastive Estimation (DHN-NCE) loss
+\item $\mathcal{L}^{v \rightarrow t} \in \mathbb{R}$ represents the directional decoupled image-to-text contrastive loss component
+\item $\mathcal{L}^{t \rightarrow v} \in \mathbb{R}$ represents the directional decoupled text-to-image contrastive loss component
+\end{itemize}
+
+where the hardness weighting formulas leverage exponential scaling to amplify the contributions of hard negatives (those with higher similarity scores) while suppressing easier negatives. They are formulated as \cite{medclipsam}:
+\begin{equation}
+\mathcal{W}_{\mathbf{I}_{p,i}\mathbf{T}_{p,j}}^{v \rightarrow t} = (B - 1) \times \frac{e^{\beta_1 \mathbf{I}_{p,i}\mathbf{T}_{p,j} / \tau}}{\sum_{k \neq i} e^{\beta_1 \mathbf{I}_{p,i}\mathbf{T}_{p,k} / \tau}}
+\end{equation}
+\begin{equation}
+\mathcal{W}_{\mathbf{T}_{p,i}\mathbf{I}_{p,j}}^{t \rightarrow v} = (B - 1) \times \frac{e^{\beta_2 \mathbf{T}_{p,i}\mathbf{I}_{p,j} / \tau}}{\sum_{k \neq i} e^{\beta_2 \mathbf{T}_{p,i}\mathbf{I}_{p,k} / \tau}}
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathcal{W}_{\mathbf{I}_{p,i}\mathbf{T}_{p,j}}^{v \rightarrow t}, \mathcal{W}_{\mathbf{T}_{p,i}\mathbf{I}_{p,j}}^{t \rightarrow v} \in \mathbb{R}^+$ represent the directional hardness weighting functions for the image-to-text and text-to-image directions, which amplify the penalty for hard negative samples
+\item $B \in \mathbb{N}$ represents the total batch size, making $(B - 1)$ the total number of negative samples relative to the anchor
+\item $\beta_1, \beta_2 \ge 0$ represent the specific image-to-text and text-to-image hardness parameters controlling the exponential scaling
+\item $\mathbf{I}_{p,i}\mathbf{T}_{p,j}, \mathbf{T}_{p,i}\mathbf{I}_{p,j} \in \mathbb{R}$ represent the similarity scores between the anchor and the $j$-th negative sample being evaluated
+\item $\mathbf{I}_{p,i}\mathbf{T}_{p,k}, \mathbf{T}_{p,i}\mathbf{I}_{p,k} \in \mathbb{R}$ represent the similarity scores between the anchor and the $k$-th negative sample, used in the denominator to normalize the weight distribution
+\item $\tau \in \mathbb{R}^+$ represents the scaling temperature parameter
+\item $i$ represents the index of the positive anchor sample within the mini-batch
+\item $j$ represents the index of the specific hard negative sample being weighted, such that $j \neq i$
+\item $k$ represents an index iterating over all negative samples in the batch ($k \neq i$) to compute the exponential sum in the denominator
+\end{itemize}
+This mechanism sharpens the total weight distribution, ensuring the model prioritizes refining distinctions for challenging clinical cases \cite{medclipsam}.
+
+\subsubsection{Coarse Localization through Saliency Mapping: From CAM to M2IB}
+\label{sec:localization}
+While MedCLIP provides global semantic alignment, translating this alignment into a spatial localization map necessitates interpreting the internal representations of the vision encoder. In this stage, the pipeline utilizes the fine-tuned BiomedCLIP model—now updated with the optimized parameters $\theta = \{\theta_{img}, \theta_{text}\}$—as the backbone for feature extraction \cite{medclipsam}.
+
+\paragraph{LLM Prompt Generation} Because the BiomedCLIP text encoder (PubMedBERT) is pre-trained on complex biomedical captions from PubMed, relying on simplistic, discrete class labels (e.g., "brain tumor") yields suboptimal latent alignments. To bridge this semantic domain gap, the state-of-the-art framework employs Large Language Models (LLMs), such as \textbf{GPT-4}, to systematically generate contextually rich, descriptive text prompts. Specifically, this prompt engineering process utilizes a structured instruction template designed to extract unique morphological and visual features \cite{medclipsam}:
+\begin{promptbox}
+``Give a sentence caption that describes unique visual features of \textbf{[TARGET]} in \textbf{[MODALITY]}''
+\end{promptbox}
+The resulting sophisticated caption serves as the expanded text query $q$, providing a much richer semantic prior that strictly guides the visual model to attend to salient anatomical characteristics \cite{medclipsam}.
+
+\paragraph{Image and Text Embedding Extraction} Given an input medical image $\mathbf{I}$ and the corresponding LLM-generated clinical text prompt $q$, the image encoder $f_{\text{vis}}$ and the text encoder $f_{\text{text}}$ from the fine-tuned BiomedCLIP model are used to explicitly extract the latent embeddings \cite{medclipsam}:
+\begin{equation}
+\mathbf{v} = f_{\text{vis}}(\mathbf{I}; \theta_{img})
+\end{equation}
+\begin{equation}
+\mathbf{t} = f_{\text{text}}(q; \theta_{text})
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathbf{v}, \mathbf{t}$ represent the extracted latent image and text embeddings, respectively
+\item $f_{\text{vis}}, f_{\text{text}}$ represent the image and text encoder functions from the fine-tuned BiomedCLIP model
+\item $\mathbf{I}$ represents the input medical image
+\item $q$ represents the LLM-generated clinical text prompt
+\item $\theta_{img}, \theta_{text}$ represent the optimized learnable parameters of the image and text encoders, respectively
+\end{itemize}
+
+The core zero-shot segmentation process subsequently relies on the Multi-modal Information Bottleneck (M2IB) technique, which generates continuous visual saliency maps by mathematically associating the text prompts with the localized image regions. M2IB learns to align the modalities by maximizing the mutual information between the image and text representations while filtering out irrelevant background information \cite{medclipsam}.
+
+This introduces a stochastic information bottleneck $\mathbf{A} \in \mathbb{R}^{H \times W}$ such that $0 \le \mathbf{A} \le 1$, producing a continuous visual saliency map optimized via \cite{medclipsam}:
+\begin{equation}
+\mathbf{A} = MI(\mathbf{v}, \mathbf{t}; \theta) - \gamma \times MI(\mathbf{v}, \mathbf{I}; \theta)
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathbf{A} \in [0,1]^{H \times W}$ represents the stochastic information bottleneck, yielding the optimized continuous visual saliency map over spatial dimensions $H$ and $W$
+\item $MI(\cdot, \cdot; \theta)$ represents the Mutual Information evaluated with respect to the optimized model parameters $\theta$
+\item $\mathbf{v}$ represents the extracted latent image embedding
+\item $\mathbf{t}$ represents the extracted latent text embedding derived from the clinical prompt
+\item $\theta$ represents the combined optimized parameters of the visual and textual encoders ($\theta=\{\theta_{img},\theta_{text}\}$)
+\item $\gamma \in \mathbb{R}^+$ represents the regularization hyperparameter controlling the penalty applied to the mutual information between the latent representation and the raw image
+\item $\mathbf{I}$ represents the original input medical image
+\end{itemize}
+
+To transition from this continuous probabilistic map to a discrete pixel-wise segmentation, Otsu's thresholding is applied to automatically determine an optimal threshold $\eta^*$ that separates the foreground from the background. Over the continuous spatial coordinates $(x,y)$, the binarized segmentation is formalized as \cite{medclipsam}:
+\begin{equation}
+Y_{otsu} = \begin{cases} 1, & \mathbf{A}(x,y) \ge \eta^* \\ 0, & \mathbf{A}(x,y) < \eta^* \end{cases}
+\end{equation}
+where:
+\begin{itemize}
+\item $Y_{otsu} \in \{0, 1\}$ represents the discrete, binarized segmentation mask evaluated at spatial coordinates $(x,y)$
+\item $\mathbf{A}(x,y) \in [0,1]$ represents the continuous probabilistic value of the visual saliency map at coordinates $(x,y)$
+\item $\eta^* \in [0,1]$ represents the optimal threshold automatically determined via Otsu's thresholding algorithm to separate foreground from background
+\item $x, y$ represent the spatial coordinates across the dimensions of the generated saliency map
+\item $1, 0$ represent the assigned binary labels for the extracted foreground (anatomical structure/pathology) and the background, respectively
+\end{itemize}
+
+\subsubsection{Boundary Refinement: From CRF to Connected Component Analysis}
+\label{sec:refinement}
+After thresholding, small, disconnected contours may still exist. The framework refines this using Connected Component Analysis on the identified contours $C$. For each connected component $c \in C$, a confidence score is computed based on the probabilities $p_i$ of pixel $i$ belonging to the foreground and the predicted binary labels $\hat{y}_i$ \cite{medclipsam}:
+\begin{equation}
+Confidence(c) = \frac{\sum_{i \in c} p_i}{\sum_{i \in c} \hat{y}_i}
+\end{equation}
+where:
+\begin{itemize}
+\item $Confidence(c) \in \mathbb{R}^+$ represents the computed confidence score for the specific connected component $c$
+\item $c \in C$ represents a single connected component from the set of all identified contours $C$
+\item $i \in c$ represents the spatial index of a specific pixel belonging to the connected component $c$
+\item $p_i \in [0,1]$ represents the continuous probability of pixel $i$ belonging to the foreground
+\item $\hat{y}_i \in \{0,1\}$ represents the predicted discrete binary label for pixel $i$
+\item $\sum_{i \in c}$ represents the discrete summation over all pixels $i$ contained strictly within the boundary of the connected contour $c$
+\end{itemize}
+
+Using a predefined threshold $\eta_c$, the most confident components form the final coarse segmentation:
+\begin{equation}
+Y_{coarse} = \bigcup_{c : Confidence(c) > \eta_c} c
+\end{equation}
+where:
+\begin{itemize}
+\item $Y_{coarse}$ represents the final coarse spatial segmentation mask
+\item $\bigcup$ represents the mathematical union operator aggregating all valid connected components into a single mask
+\item $c$ represents a specific connected component (contour) that satisfies the confidence condition
+\item $Confidence(c) \in \mathbb{R}^+$ represents the previously computed confidence score for the connected component $c$
+\item $\eta_c \in \mathbb{R}^+$ represents the predefined scalar threshold used to filter out low-confidence, isolated contours
+\end{itemize}
+
+In the final stage, this coarse segmentation provides visual prompts $V$ (such as bounding boxes or sampled points) for the Segment Anything Model (SAM). The definitive zero-shot segmentation mask is generated as \cite{medclipsam}:
+\begin{equation}
+Y_{zero-shot} = SAM(Y_{coarse}; V)
+\end{equation}
+where:
+\begin{itemize}
+\item $Y_{zero-shot}$ represents the definitive zero-shot segmentation mask generated by the framework
+\item $SAM$ represents the Segment Anything Model utilized to extract high-fidelity spatial masks
+\item $Y_{coarse}$ represents the initial coarse spatial segmentation mask produced in the previous refinement stage
+\item $V$ represents the explicit visual prompts, such as bounding box coordinates or sampled foreground points, derived from the coarse mask to guide the segmentation
+\end{itemize}
+Ultimately, this sequence of operations isolates the exact anatomical structures, ensuring that any subsequent multi-modal generation relies strictly on verifiable spatial boundaries \cite{medclipsam}.
+
+\subsubsection{High-Fidelity Mask Extraction with SAM}
+\label{sec:sam}
+The final stage of the pipeline leverages the Segment Anything Model (SAM) to translate the refined localization outputs into a definitive, high-fidelity segmentation mask $\mathcal{R}$ \footnote{In the original MedCLIP-SAMv2 formulation, the definitive zero-shot mask is denoted as $Y_{zero-shot}$ \cite{medclipsamv2}. Throughout this thesis, we map this output to $\mathcal{R}$ to maintain strict notational consistency with the explicit visual evidence extraction objective established in Equation }. SAM acts as a universal visual foundation model equipped with a promptable architecture, consisting of a powerful and computationally heavy image encoder $\mathcal{E}_{I}$, a flexible prompt encoder $\mathcal{E}_{P}$, and a lightweight mask decoder $\mathcal{D}$ \cite{medclipsam, medclipsamv2}.
+
+The deterministic mask $Y_{coarse}$ generated by the Connected Component Analysis (CCA) is not utilized directly as the final clinical output; rather, it is algorithmically converted into spatial visual prompts $\mathcal{P}$. These prompts are geometrically derived either as a set of extreme bounding box coordinates ($P_{bbox}$) that enclose each connected contour, or as distinct foreground points ($P_{points}$) randomly sampled within the highly confident regions. This mathematical abstraction acts as a definitive guide for SAM's attention mechanisms \cite{medclipsam, medclipsamv2}:
+
+\begin{equation}
+\mathcal{R} = \mathcal{D}\left( \mathcal{E}_{I}(I), \mathcal{E}_{P}(\mathcal{P}) \right)
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathcal{R}$ represents the definitive, high-fidelity spatial segmentation mask or extracted Region of Interest
+\item $\mathcal{D}$ represents the lightweight mask decoder of the Segment Anything Model (SAM)
+\item $\mathcal{E}_{I}$ represents SAM's computationally heavy image encoder
+\item $I$ represents the original input medical image
+\item $\mathcal{E}_{P}$ represents SAM's flexible prompt encoder
+\item $\mathcal{P}$ represents the geometrically derived spatial visual prompts (such as extreme bounding box coordinates $P_{bbox}$ or distinct foreground points $P_{points}$) used to guide the attention mechanisms
+\end{itemize}
+
+By conditioning the mask decoder on these text-derived spatial prompts, SAM operates in a purely zero-shot capacity, bypassing the need for task-specific fine-tuning. Interestingly, recent comparative analyses reveal that the standard SAM architecture (utilizing a large ViT-H backbone) demonstrates remarkable robustness to imperfect visual prompts, frequently outperforming domain-specific adaptations like MedSAM or SAM-Med2D in this specific zero-shot regime\cite{medclipsam}.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{img2/clip_crf.png}
+    \caption{Qualitative comparison of medical image segmentation results across three modalities using the MedCLIP-SAM framework \cite{medclipsam}. 
+    The rows represent breast tumor ultrasound (top), brain tumor MRI (middle), and lung chest X-ray (bottom). 
+    Column \textbf{(a)} shows the original clinical scans. 
+    Column \textbf{(b)} displays the initial coarse segmentation obtained from CRF-processed BiomedCLIP saliency maps (CLIP-CRF). 
+    Column \textbf{(c)} illustrates the zero-shot segmentation masks generated by SAM, guided by bounding boxes derived from gScoreCAM. 
+    Column \textbf{(d)} presents the results of the weakly supervised segmentation (WSS) refined via a Residual UNet. 
+    Column \textbf{(e)} provides the manually annotated ground truth (GT) masks for reference.}
+    \label{fig:segmentation_results}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{img2/medclip_sam2.png}
+    \caption{Qualitative results, quantitative DSC metrics, and uncertainty estimation of the MedCLIP-SAM2 framework across four medical imaging modalities: Brain MRI, Breast Ultrasound, Lung CT, and Lung X-ray \cite{medclipsamv2}. 
+    Column \textbf{(a)} shows the original input scans. 
+    Columns \textbf{(b)}, \textbf{(c)}, and \textbf{(d)} illustrate the segmentation progression from coarse localization to zero-shot and weakly supervised segmentation (WSS), respectively. The overlaid Dice Similarity Coefficient (DSC) values quantify the improvement in overlap accuracy at each stage. 
+    Column \textbf{(e)} provides the manually annotated ground truth (GT) for comparison. 
+    Column \textbf{(f)} presents the pixel-wise uncertainty maps, where the color gradient (from 0 to 1.0) indicates the model's confidence levels, highlighting regions of anatomical ambiguity or potential segmentation errors.}
+    \label{fig:medclipsam2_analysis}
+\end{figure}
+
+The resultant high-fidelity spatial mask $\mathcal{R}$ effectively isolates the pathology or anatomical structure. In the absolute state-of-the-art implementations, these zero-shot predictions $\mathcal{R}$ are subsequently employed as pseudo-labels ($q = \{(I, \mathcal{R})\}$) to train specialized medical segmentation networks (such as nnUNet) in an uncertainty-aware, weakly supervised paradigm\cite{medclipsamv2}.
+
+Ultimately, this rigorous, multi-stage extraction dramatically restricts the receptive field for any subsequent Multimodal Large Language Model. By ensuring that the final clinical reasoning is anchored strictly in verifiable, deterministically bounded visual evidence, the framework effectively mitigates the black-box hallucination bottleneck.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% CAPITOLO 3 (da 3.1 a 3.3) %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

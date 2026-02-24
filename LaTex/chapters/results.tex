@@ -1,0 +1,86 @@
+\chapter{Results}
+\section{End-to-End Pipeline Validation}
+
+\section{A Visual Journey: Qualitative Impact of RoI Extraction}
+
+\section{Case Studies in MLLM Generation}
+
+\section{Preliminary Quantitative Observations}
+
+
+\begin{table}[!ht]
+\centering
+\fontsize{9}{11}\selectfont 
+\setlength{\tabcolsep}{3.5pt} 
+\renewcommand{\arraystretch}{1.2} 
+
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}cc l ccc cc}
+\toprule
+\multicolumn{2}{c}{\textbf{Models}} & \textbf{Pipeline} & \multicolumn{3}{c}{\textbf{ROUGE Score}} & \multicolumn{2}{c}{\textbf{Accuracy}} \\
+\cmidrule(lr){1-2} \cmidrule(lr){3-3} \cmidrule(lr){4-6} \cmidrule(lr){7-8}
+\textbf{Gen.} & \textbf{Judge} & \textit{(Workflow Stages)} & \textbf{R-1} & \textbf{R-2} & \textbf{R-L} & \textbf{EM} & \textbf{Judge} \\
+\midrule
+
+% --- BLOCCO 1: MEDGEMMA 1.5 4B ---
+\multirow{5}{*}{\rotatebox{90}{\textbf{\shortstack{MedGemma\\1.5 4B IT}}}} 
+& \multirow{5}{*}{\rotatebox{90}{\scriptsize \textbf{\shortstack{Qwen2.5\\7B-Instr.}}}} 
+& \pipe{\query}\pipe{\nerOff}\pipe{\typeRaw}\pipe{\iconEye}{\iconEval} & 5.61 & 1.00 & 5.59 & 0.25 & 45.62 \\
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeBBox}\pipe{\iconEye}{\iconEval} & 0.00 & 0.00 & 0.00 & 0.00 & 65.49 \\
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeAttn}\pipe{\iconEye}{\iconEval} & \cellcolor{bestcolor}\textbf{29.37} & 1.83 & \cellcolor{bestcolor}\textbf{29.34} & 0.00 & \cellcolor{bestcolor}\textbf{66.81} \\
+& & \pipe{\query}\pipe{\nerOn}\pipe{\typeAttn}\pipe{\iconEye}{\iconEval} & 24.82 & 1.65 & 24.80 & \cellcolor{bestcolor}\textbf{21.83} & 37.26 \\
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeSeg}\pipe{\iconEye}{\iconEval} & 6.20 & \cellcolor{bestcolor}\textbf{1.89} & 6.19 & 0.58 & 38.21 \\
+& & \pipe{\query}\pipe{\nerOn}\pipe{\typeSeg}\pipe{\faMicroscope}{\iconEval} & 0.0000 & 0.00 & 0.00 & 0.00 & \cellcolor{bestcolor}\textbf{68.30} \\
+
+\midrule
+
+% --- BLOCCO 2: MEDGEMMA 4B IT (NUOVO) ---
+\multirow{5}{*}{\rotatebox{90}{\textbf{\shortstack{MedGemma\\4B IT}}}} 
+& \multirow{5}{*}{\rotatebox{90}{\scriptsize \textbf{\shortstack{Qwen2.5\\7B-Instr.}}}} 
+% 1. Baseline (Dati forniti)
+& \pipe{\query}\pipe{\nerOff}\pipe{\typeRaw}\pipe{\iconEye}{\iconEval} & 13.81 & 2.39 & 13.71 & 1.53 & 46.73 \\
+% 2. BBox (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeBBox}\pipe{\iconEye}{\iconEval} & 0.00 & 0.00 & 0.00 & 0.00 & 65.74 \\
+% 3. HeatMap No NER (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeAttn}\pipe{\iconEye}{\iconEval} & \cellcolor{bestcolor}\textbf{37.48} & 2.79 & \cellcolor{bestcolor}\textbf{37.43} & \cellcolor{bestcolor}\textbf{34.60} & 43.59 \\
+% 4. HeatMap NER ON (Placeholder)
+& & \pipe{\query}\pipe{\nerOn}\pipe{\typeBBox}\pipe{\iconEye}{\iconEval} & 0.00 & 0.00 & 0.00 & 0.00 & \cellcolor{bestcolor}\textbf{65.97} \\
+% 5. Segmentation (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeSeg}\pipe{\iconEye}{\iconEval} & 32.23 & \cellcolor{bestcolor}\textbf{2.89} & 32.14 & 31.15 & 45.03 \\
+
+\midrule
+
+% --- BLOCCO 3: OCTOMED ---
+\multirow{5}{*}{\rotatebox{90}{\textbf{\shortstack{MedGemma\\4B IT}}}} 
+& \multirow{5}{*}{\rotatebox{90}{\scriptsize \textbf{\shortstack{Qwen2.5\\7B-Instr.}}}} 
+% 1. Baseline (Dati forniti)
+& \pipe{\query}\pipe{\nerOff}\pipe{\typeRaw}\pipe{\iconEye}{\iconEval} & 0.3031 & 0.0147 & 0.3024 & 24.43 & 45.43 \\
+% 2. BBox (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeBBox}\pipe{\iconEye}{\iconEval} & 0.00 & 0.00 & 0.00 & 0.00 & 65.74 \\
+% 3. HeatMap No NER (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeAttn}\pipe{\iconEye}{\iconEval} & \cellcolor{bestcolor}\textbf{37.48} & 2.79 & \cellcolor{bestcolor}\textbf{37.43} & \cellcolor{bestcolor}\textbf{34.60} & 43.59 \\
+% 4. HeatMap NER ON (Placeholder)
+& & \pipe{\query}\pipe{\nerOn}\pipe{\typeBBox}\pipe{\iconEye}{\iconEval} & 0.00 & 0.00 & 0.00 & 0.00 & \cellcolor{bestcolor}\textbf{65.97} \\
+% 5. Segmentation (Placeholder)
+& & \pipe{\query}\pipe{\nerOff}\pipe{\typeSeg}\pipe{\iconEye}{\iconEval} & 32.23 & \cellcolor{bestcolor}\textbf{2.89} & 32.14 & 31.15 & 45.03 \\
+
+
+\bottomrule
+\end{tabular*}
+
+\caption{\textbf{Experimental Results.} 
+Legend: 
+\query = Query; 
+\nerOn/\nerOff = NER enabled/disabled; 
+\typeRaw = Raw Image (Baseline); 
+\typeAttn = Attention Map; 
+\typeSeg = Segmentation; 
+\iconEye = Generation; 
+\iconEval = Evaluation. 
+Gray-shaded cells indicate the best performance within each specific experiment class. 
+Values are expressed in percentages.}
+\label{tab:results_main}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                   CAPITOLO 6                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

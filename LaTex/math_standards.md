@@ -16,8 +16,12 @@ I am writing a thesis on Medical Visual Question Answering (VQA) and Grounding. 
 ### 2. Models and Encoders
 | Symbol | Description |
 | :--- | :--- |
-| $f_{\text{vis}}$ | Visual Encoder function (e.g., ViT/BiomedCLIP visual tower). |
-| $f_{\text{text}}$ | Textual Encoder function (e.g., PubMedBERT). |
+| $f_{\text{vis}}$ | Visual Encoder function (ViT backbone within $f_{\text{VL}}$). |
+| $f_{\text{text}}$ | Textual Encoder function (domain-specific biomedical text encoder within $f_{\text{VL}}$). |
+| $f_{\text{VL}}$ | Contrastive Vision-Language encoder (dual-encoder backbone for cross-modal attention). |
+| $f_{\text{seg}}$ | Segmentation foundation model for medical image segmentation. |
+| $\mathcal{N}$ | Biomedical Named Entity Recognition (NER) module. |
+| $\mathcal{G}$ | Generative Language Model used for query expansion. |
 | $\theta_{\text{vis}}, \theta_{\text{text}}$ | Learnable parameters specific to the visual and textual encoders. |
 | $\Theta$ | Global set of hyperparameters for the entire pipeline. |
 | $\mathcal{M}_{\text{VQA}}$ | The downstream VQA Model (inference engine). |
@@ -39,4 +43,13 @@ I am writing a thesis on Medical Visual Question Answering (VQA) and Grounding. 
 | $\mathcal{R}$ | The Extracted Region of Interest (conceptual/logical evidence). |
 | $\mathbf{I}'$ | The final Visually Prompted/Augmented Image fed to the VQA. |
 | $\mathbf{b}_k$ | Vector of coordinates for the $k$-th Bounding Box ROI. |
-| $\mathcal{P}_{\text{bbox}}, \mathcal{P}_{\text{seg}}$ | Specific visual prompting pathways (Box vs Segmentation). |
+| $\mathcal{P}_{\text{bbox}}, \mathcal{P}_{\text{heat}}, \mathcal{P}_{\text{seg}}$ | Specific visual prompting pathways (Box, Heatmap, Segmentation). |
+
+### 5. NLP and Query Routing
+| Symbol | Description |
+| :--- | :--- |
+| $\mathcal{E}(q)$ | Set of biomedical named entities extracted from query $q$ by $\mathcal{N}$. |
+| $\delta(q)$ | Binary query quality decision function ($\delta : \mathcal{Q} \to \{0,1\}$). |
+| $\tau_e$ | Entity threshold for the query quality criterion. |
+| $\tau_w$ | Word-count threshold for the query quality criterion. |
+| $\text{Expand}(q; \mathcal{G})$ | Generative expansion of query $q$ via model $\mathcal{G}$. |
