@@ -69,6 +69,22 @@ FEW_SHOT_SEED=42                         # Random seed for few-shot sampling
 SAVE_GENERATIONS=true                   # Save model generations to file
 TRUST_REMOTE_CODE=false                 # Trust remote code (for custom models)
 
+# ============================================================================
+# MULTIMODAL VISION SETTINGS (model-specific)
+# ============================================================================
+MIN_PIXELS=""                            # Min pixel count for vision encoder (empty = default)
+MAX_PIXELS=""                            # Max pixel count for vision encoder (empty = default)
+
+# ============================================================================
+# PREPROCESSING CONTEXT (set by orchestrator bridge)
+# ============================================================================
+PREPROC_TYPE="${PREPROC_TYPE:-}"          # attn_map | bbox_preproc | segmentation | (empty=baseline)
+
+# ============================================================================
+# CHECKPOINTING CONFIGURATION
+# ============================================================================
+CHECKPOINT_INTERVAL=0                    # Save every N samples (0 = disabled)
+
 
 
 # ==============================================================================
@@ -211,6 +227,25 @@ if [ "$TRUST_REMOTE_CODE" = true ]; then
     CMD="$CMD --trust_remote_code"
 fi
 
+# Add vision pixel settings (model-specific)
+if [ -n "$MIN_PIXELS" ]; then
+    CMD="$CMD --min_pixels $MIN_PIXELS"
+fi
+
+if [ -n "$MAX_PIXELS" ]; then
+    CMD="$CMD --max_pixels $MAX_PIXELS"
+fi
+
+# Add checkpointing
+if [ -n "$CHECKPOINT_INTERVAL" ] && [ "$CHECKPOINT_INTERVAL" -gt 0 ] 2>/dev/null; then
+    CMD="$CMD --checkpoint_interval $CHECKPOINT_INTERVAL"
+fi
+
+# Add preprocessing type for prompt context injection
+if [ -n "$PREPROC_TYPE" ]; then
+    CMD="$CMD --preproc_type $PREPROC_TYPE"
+fi
+
 # ==============================================================================
 # 4. PRINT CONFIGURATION SUMMARY
 # ==============================================================================
@@ -268,6 +303,16 @@ if [ "$USE_FEW_SHOT" = true ]; then
     echo "    - Random Seed: $FEW_SHOT_SEED"
     echo "    - Source: ${FEW_SHOT_SOURCE:-'Same as test data'}"
 fi
+echo ""
+echo "Preprocessing Context:"
+echo "  - Type: ${PREPROC_TYPE:-baseline (no injection)}"
+echo ""
+echo "Vision Settings:"
+echo "  - Min Pixels: ${MIN_PIXELS:-default}"
+echo "  - Max Pixels: ${MAX_PIXELS:-default}"
+echo ""
+echo "Checkpointing:"
+echo "  - Interval: ${CHECKPOINT_INTERVAL:-0} samples"
 echo ""
 echo "Output Control:"
 echo "  - Save Generations: $SAVE_GENERATIONS"

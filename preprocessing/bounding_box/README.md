@@ -18,11 +18,6 @@ It includes a robust **3-Layer Filtering System** applied before and after box g
 graph TD
     A[Input Image] --> B{Mode Selection};
 
-    %% === NUOVO RAMO: ANATOMICAL MASKING MODULE ===
-    A -.-> AM1[Otsu's Method Binarization]
-    AM1 -.-> AM2[Top-Hat / Morphological Cleanup]
-    AM2 -.-> AM3[(Anatomical Body Mask)]
-
     %% Inference Path
     B -- Inference Mode --> C(BiomedCLIP Encoder);
     C --> D{Prompt Source};
@@ -34,18 +29,14 @@ graph TD
     T2 -- Explode=True --> E_Multi["N x gScoreCAM Tasks"];
     T2 -- Composite=True --> E_Comp["Iterate Regions -> Aggregate"];
 
-    E --> F[Raw Activation Map];
+    E --> F[Activation Map];
     
-    %% === CAM FUSION (Qui agisce Otsu la prima volta) ===
-    F --> F_FUSION[Masked Activation Map \n 'cam * mask']
-    AM3 -. "Apply Mask" .-> F_FUSION
-
     %% Post-Processing
-    F_FUSION -- Precision --> G[Pre-CRF Hard Cut];
+    F -- Precision --> G[Pre-CRF Hard Cut];
     G --> H[Dense CRF Refinement];
     H --> I[Binary Mask];
     
-    F_FUSION -- Fast --> J[Dynamic Thresholding];
+    F -- Fast --> J[Dynamic Thresholding];
     J --> I;
 
     %% Gold Path
@@ -56,17 +47,9 @@ graph TD
     %% Final Output
     I --> N[Contour Extraction];
     N --> Q[Adaptive Padding];
-    Q --> R["Smart Clamping"];
-    
-    %% === SMART CLAMPING (Qui agisce Otsu la seconda volta) ===
-    AM3 -. "safe_body_bounds" .-> R
-    
+    Q --> R["Smart Clamping (Anatomical Mask)"];
     R --> O[Final Coordinates];
     O --> P["Data Merge & Sanitization"];
-
-    %% Stili per far risaltare l'elaborazione dell'immagine
-    classDef maskLogic fill:#e1f5fe,stroke:#01579b,stroke-width:2px,stroke-dasharray: 5 5;
-    class AM1,AM2,AM3 maskLogic;
 
 ```
 

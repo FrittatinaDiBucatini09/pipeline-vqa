@@ -17,6 +17,7 @@
 - [Usage](#-usage)
   - [Running the Orchestrator](#running-the-orchestrator)
   - [Running Individual Modules](#running-individual-modules)
+- [Intelligent Prompt Injection](#-intelligent-prompt-injection)
 - [Experiments & Benchmarks](#-experiments--benchmarks)
 - [License](#-license)
 
@@ -90,18 +91,38 @@ If routing is **not** selected in the orchestrator, preprocessing stages fall ba
 
 ```text
 pipeline-vqa/
-└── Thesis/
-    ├── data_prep/         # Data preparation scripts for GEMEX and MIMIC-CXR
-    ├── preprocessing/     # Core computer vision pipeline
-    │   ├── attention_map/   # Heatmap generation from attention weights
-    │   ├── bounding_box/    # BBox extraction and intersection metrics
-    │   ├── medclip_routing/ # NLP query expansion middleware (SciSpacy + Gemma)
-    │   └── segmentation/    # Localization and MedSAM/SAM-based segmentation
-    ├── vqa/               # Generative AI components
-    │   ├── src/           # VQA generation and LLM judge evaluation logic
-    │   └── tests/         # Integration and E2E error handling tests
-    ├── orchestrator/      # High-level pipeline controller
-    └── experiments/       # Large-scale gridsearch configurations & benchmark reports
+├── data_prep/                  <-- DATA ENGINEERING
+│   ├── prepare_gemex.py        # Dataset preparation scripts
+│   └── ...
+│
+├── preprocessing/              <-- THE ENGINE (Core Logic)
+│   ├── attention_map/          # Heatmap generation logic
+│   ├── segmentation/           # MedSAM (2/3) segmentation logic
+│   ├── medclip_routing/        # NLP query expansion middleware (SciSpacy + Gemma)
+│   └── bounding_box/           # Bounding Box generation & evaluation
+│       ├── src/                # Source code
+│       ├── configs/            # Configuration files (.conf)
+│       └── scripts/            # Submission scripts
+│
+├── vqa/                        <-- THE INTELLIGENCE (VQA Logic)
+│   ├── src/                    # Core VQA generation & LLM Judge
+│   ├── configs/                # Configuration files (e.g., medgemma_1_5.conf)
+│   └── scripts/                # Execution & Evaluation scripts
+│
+├── orchestrator/               <-- THE INTERFACE (Pipeline Manager)
+│   ├── orchestrator.py         # Main CLI: stage selection, config discovery, SLURM chaining
+│   └── slurm_templates.py      # sbatch template generation (e.g. VQA Judge wrapper)
+│
+├── experiments/                <-- THE LAB (Experiment Tracking)
+│   ├── 01_bbox_gridsearch/     # Grid Search tracking & configs
+│   └── ...                     # Future experiments
+│
+├── archive_results.py          # Results archiving & cleanup utility
+├── clean_results.sh            # Legacy cleanup script
+├── run_orchestrator.sh         # Root-level launcher (venv bootstrap + CLI entry point)
+├── build_all_images.sh         # Recursive Docker build script (Project-Wide)
+│
+└── orchestrator_runs/          # Auto-generated run directories (gitignored)
 
 ```
 
@@ -117,7 +138,8 @@ pipeline-vqa/
   * **Automatic VQA integration** via manifest generation (`vqa_manifest.csv`).
 * **Automated Bounding Boxes**: Gridsearch configurations allow tuning of bounding box extraction thresholds, CRF integration, and region exploding/compositing.
 * **Agentic Query Expansion**: Optional NLP middleware that evaluates query quality with SciSpacy and expands brief queries using Gemma-2-2B-it before visual preprocessing, improving downstream VQA quality.
-* **Preprocessing→VQA Bridge**: The orchestrator automatically detects routing→preprocessing and preprocessing→VQA chains and configures data flow via environment variable injection (`ROUTED_DATASET_OVERRIDE`, `DATA_FILE_OVERRIDE`).
+* **Preprocessing→VQA Bridge**: The orchestrator automatically detects routing→preprocessing and preprocessing→VQA chains and configures data flow via environment variable injection (`ROUTED_DATASET_OVERRIDE`, `DATA_FILE_OVERRIDE`, `PREPROC_TYPE`).
+* **Intelligent Prompt Injection**: The VQA generation prompt is automatically enriched with visual context describing what preprocessing was applied (heatmap attention weights, bounding boxes, or segmentation masks), helping the LLM correctly interpret visual artifacts in the image. Baseline runs receive no injection and are unaffected.
 * **Unified Experiment Tracking (WandB)**: All preprocessing stages log to the single `GEMeX-VQA-Pipeline` WandB project. Orchestrator runs automatically group all stages under a shared WandB run group (`run_YYYYMMDD_HHMMSS`), enabling cross-stage comparison, final summary metrics (`success_rate`, `throughput_img_per_sec`), and artifact lineage tracking for key outputs.
 * **Advanced VQA Generation**: Ties extracted image features to text via state-of-the-art vision-language models (MedGemma, Qwen2-VL, etc.).
 * **LLM as a Judge**: Evaluates VQA outputs systematically against ground-truth/gold-standard datasets using an LLM Judge, minimizing the need for manual grading.
@@ -190,6 +212,78 @@ You can easily trigger individual components using the provided Slurm/Bash submi
 * **Segmentation**: `./preprocessing/segmentation/submit_segmentation.sh`
 * **Bounding Boxes**: `./preprocessing/bounding_box/submit_bbox_preprocessing.sh`
 * **VQA & LLM Judge**: `./vqa/submit_generation.sh` && `./vqa/scripts/run_judge.sh`
+
+---
+
+## 💡 Intelligent Prompt Injection
+
+When a preprocessing stage runs before VQA generation, the LLM receives the preprocessed image (containing overlaid heatmaps, bounding boxes, or segmentation masks) but has no context about what those visual artifacts represent. The **Intelligent Prompt Injection** system solves this by automatically enriching the VQA prompt with a description of the preprocessing applied.
+
+### How It Works
+
+The injection propagates through the pipeline via a single environment variable (`PREPROC_TYPE`) that flows from the orchestrator bridge into the Docker container and then into the Python generation script.
+
+```
+[Orchestrator Bridge]         [Docker Host]             [Container]           [generate_vqa.py]
+_generate_preprocessing_  →  submit_generation.sh  →  run_generation.sh  →  prepare_chat_
+to_vqa_bridge()              -e PREPROC_TYPE="..."    --preproc_type $VAR     conversations()
+export PREPROC_TYPE=                                                          PREPROC_CONTEXT[type]
+  "{stage_key}"                                                               + prompt_template
+```
+
+The injection is a **prefix** prepended to the existing prompt template. The core question, few-shot examples, and formatting instructions remain completely intact. In **baseline mode** (no preprocessing stage selected), `PREPROC_TYPE` is empty and nothing is injected.
+
+### Injected Context by Preprocessing Type
+
+| Stage Key | `PREPROC_TYPE` | Visual Artifact | Injected Context |
+|---|---|---|---|
+| `attn_map` | `attn_map` | Heatmap overlay | Explains that hotter colors (red/yellow) are high-attention regions; cooler colors (blue) are low-attention |
+| `bbox_preproc` | `bbox_preproc` | Bounding boxes | States that regions of interest are enclosed in **red/fuchsia bounding boxes** |
+| `segmentation` | `segmentation` | Segmentation mask | States that segmented structures are highlighted in **green** and enclosed by an **azure bounding box** |
+| *(none)* | *(empty)* | Original image | No injection — baseline prompt used as-is |
+
+### Injected Text (Full)
+
+**Attention Map (`attn_map`):**
+```
+**Visual Context:** This image contains a heatmap overlay representing Attention Weights
+from a visual model. Higher intensity areas (hotter colors such as red and yellow) indicate
+regions where the model focused its visual processing, highlighting areas of clinical saliency.
+Cooler colors (blue) indicate lower attention. Use these attention cues to guide your analysis.
+```
+
+**Bounding Box (`bbox_preproc`):**
+```
+**Visual Context:** Specific regions of interest in this image have been localized. The relevant
+findings or objects are enclosed in **red/fuchsia bounding boxes**. Focus your analysis on the
+content within these bounding boxes, as they highlight the most clinically relevant areas.
+```
+
+**Segmentation (`segmentation`):**
+```
+**Visual Context:** This image features precise anatomical or pathological segmentation. The
+segmented areas of interest are highlighted in **green**, and are further encapsulated by an
+**azure (light blue) bounding box**. Focus your analysis on the segmented regions, as they
+delineate the clinically relevant structures.
+```
+
+### Standalone Usage
+
+The preprocessing type can also be set manually when running VQA generation outside the orchestrator:
+
+```bash
+# Injecting bounding box context manually
+python3 src/generate_vqa.py \
+  --model_name google/medgemma-4b-it \
+  --data_file results/vqa_manifest.csv \
+  --preproc_type bbox_preproc \
+  ...
+```
+
+Or via the config/env variable when using the shell wrapper:
+```bash
+PREPROC_TYPE=attn_map ./submit_generation.sh configs/generation/medgemma_4b.conf
+```
 
 ---
 

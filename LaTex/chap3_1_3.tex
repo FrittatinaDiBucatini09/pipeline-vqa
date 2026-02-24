@@ -1,0 +1,534 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% CAPITOLO 3 (da 3.1 a 3.3) %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\chapter{Proposed Methodology and Mathematical Framework}
+\label{chap:3}
+
+
+\newpage
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\linewidth]{pipeline_3d.png}
+    \caption{Enter Caption}
+    \label{fig:pipeline}
+\end{figure}
+
+\section{Architectural Overview of the Pipeline}
+\label{sec:3_1}
+\subsection{Core Concept: Visual Grounding for Medical VQA}
+\label{sec:3_1_1}
+
+The central thesis underpinning the proposed system is that a Medical Visual Question Answering (VQA) model achieves superior diagnostic accuracy when it is not required to attend to an entire radiographic image indiscriminately, but is instead presented with a \textit{visually prompted} image in which the clinically relevant Regions of Interest (RoIs) have been explicitly highlighted. This paradigm, referred to throughout this work as \textbf{Visual Grounding}, transforms the VQA task from an unconstrained whole-image reasoning problem into a focused, region-aware inference problem.
+
+Formally, let the raw input to the system be defined as a tuple $(\mathbf{I}, q)$, where $\mathbf{I} \in \mathbb{R}^{H \times W \times C}$ denotes a medical image (e.g., a chest X-ray) of height $H$, width $W$, and $C$ colour channels, and $q \in \mathcal{V}^*$ denotes a free-text clinical question drawn from the Kleene closure over a medical vocabulary $\mathcal{V}$. The objective of Visual Grounding is to construct an augmented image $\mathbf{I}' \in \mathbb{R}^{H \times W \times C}$ that encodes spatial emphasis on diagnostically salient regions, conditioned on the semantic content of $q$. The downstream VQA model $\mathcal{M}_{\text{VQA}}$ then operates on the pair $(\mathbf{I}', q)$ rather than $(\mathbf{I}, q)$, yielding a predicted answer:
+
+\[
+a^{*} = \mathcal{M}_{\text{VQA}}(\mathbf{I}', q)
+\]
+
+The hypothesis is that the conditional mutual information between the answer $a^{*}$ and the ground-truth answer $a_{\text{gt}}$ is maximised when the visual input carries explicit spatial priors aligned with the clinical query—i.e., $I\left(a^{*}; a_{\text{gt}} \mid \mathbf{I}', q\right) \geq I\left(a^{*}; a_{\text{gt}} \mid I, q\right)$.
+
+This design philosophy departs from end-to-end VQA architectures that implicitly learn visual attention. Instead, it externalises the grounding step as an explicit, interpretable preprocessing pipeline, thereby enabling clinical transparency, modular substitution of components, and fine-grained control over the spatial prompting strategy.
+
+\subsection{End-to-End Data Flow}
+\label{sec:3_1_2}
+The pipeline implements a strictly sequential transformation chain comprising four macro-stages, each of which consumes the output of its predecessor. The complete data flow is formalised as:
+
+\[
+(\mathbf{I}, q) \xrightarrow{\;\mathcal{S}_1\;} q' \xrightarrow{\;\mathcal{S}_2\;} \mathbf{A} \xrightarrow{\;\mathcal{S}_3\;} \mathbf{I}' \xrightarrow{\;\mathcal{S}_4\;} a^{*}
+\]
+
+where the four stages are defined as follows:
+
+\begin{itemize}
+    \item \textbf{Stage $\mathcal{S}_1$ --- Clinical NLP Analysis (Query Routing).} The raw question $q$ is analysed by a biomedical Named Entity Recognition (NER) module to assess its clinical informativeness. If the question is deemed insufficiently detailed according to a formally defined criterion (cf. \ref{sec:3_2}), it is expanded into an enriched clinical prompt $q'$ via a generative language model. If the question already satisfies the quality criterion, it is passed through unchanged, i.e., $q' = q$. This stage ensures that the downstream vision model receives a textual query of sufficient clinical specificity to drive meaningful spatial attention.
+
+    \item \textbf{Stage $\mathcal{S}_2$ --- Visual Localisation via Cross-Modal Attention.} The enriched query $q'$ and the original image $I$ are jointly encoded by a multimodal vision-language model—specifically, BiomedCLIP (a ViT-B/16 backbone pretrained on biomedical image-text pairs)—and a class activation mapping algorithm (gScoreCAM) is applied to produce a spatial attention map $\mathbf{A} \in \mathbb{R}^{H \times W}$, where each element $\mathbf{A}_{i,j} \in [0, 1]$ quantifies the relevance of pixel $(i, j)$ to the clinical query $q'$. This attention map constitutes the core localisation signal from which all subsequent visual prompts are derived.
+
+    \item \textbf{Stage $\mathcal{S}_3$ --- Visual Prompting.} The attention map $\mathbf{A}$ is transformed into a concrete visual overlay on the original image $I$. This stage admits multiple parallel pathways (detailed in Section \ref{sec:3_1_3}), each of which produces a differently prompted image $\mathbf{I}'$. The pathways share the same upstream attention signal but differ in their prompting semantics—ranging from geometric bounding boxes to dense pixel-level segmentation masks.
+
+    \item \textbf{Stage $\mathcal{S}_4$ --- VQA Inference.} The visually prompted image $\mathbf{I}'$ is paired with the clinical question $q$ (or its expanded variant $q'$) and fed to a Vision-Language Model (VLM) for answer generation. A separate evaluation module employing an LLM-as-a-Judge paradigm scores the generated answer against the gold-standard reference.
+\end{itemize}
+
+The entire pipeline can thus be expressed as a composite function:
+
+\[
+\mathcal{F} = \mathcal{S}_4 \circ \mathcal{S}_3 \circ \mathcal{S}_2 \circ \mathcal{S}_1
+\]
+
+where each $\mathcal{S}_i$ is a deterministic, self-contained transformation with well-defined input and output types. This compositional structure guarantees that any individual stage can be replaced, ablated, or extended without affecting the contract between adjacent stages. %—a property that is exploited extensively in the experimental evaluation (Chapter 4).
+
+\subsection{Modularity: Multiple Visual Prompting Pathways}
+\label{sec:3_1_3}
+A distinctive architectural decision in the proposed system is the provision of three distinct \textbf{Visual Prompting Pathways}, all of which branch from the same shared attention signal $\mathbf{A}$ produced by Stage $\mathcal{S}_2$. Each pathway implements a different strategy for converting the continuous-valued attention map into a discrete or semi-discrete visual prompt overlaid on the original image. This multi-pathway design serves a dual purpose: it enables systematic ablation studies comparing prompting strategies, and it accommodates the heterogeneous requirements of different downstream VLMs (some of which respond more effectively to bounding boxes than to heatmaps, and vice versa).
+
+The three pathways are defined as follows:
+
+\begin{itemize}
+
+    \item \textbf{Pathway $\mathcal{P}_{\text{bbox}}$ --- Bounding Box Prompting.} The attention map $\mathbf{A}$ is binarised via a threshold $\tau$ (optionally refined through Dense CRF post-processing), and contour extraction is performed on the resulting binary mask. Each connected component yields a bounding box $\mathbf{b}_k = (x_k^{\min}, y_k^{\min}, x_k^{\max}, y_k^{\max})$, which is rendered as a coloured rectangle on the image. An adaptive padding mechanism adjusts the box margins as a function of the relative box area, preventing both excessive cropping of small findings and unnecessary expansion of large ones. The prompted image is:
+
+    \[
+    \mathbf{I}'_{\text{bbox}} = \text{DrawBox}(I, \{\mathbf{b}_k\}_{k=1}^{K})
+    \]
+
+    \item \textbf{Pathway $\mathcal{P}_{\text{heat}}$ --- Heatmap Overlay Prompting.} The raw attention map $\mathbf{A}$ is normalised to $[0, 1]$, mapped through a perceptual colourmap $\phi : [0,1] \to \mathbb{R}^3$ (e.g., JET or TURBO), and alpha-blended with the original image:
+    
+    \[
+    \mathbf{I}'_{\text{heat}}(i,j) = \alpha \cdot \phi\!\left(\mathbf{A}_{i,j}\right) + (1 - \alpha) \cdot I(i,j)
+    \]
+
+    where $\alpha \in [0, 1]$ controls the blending intensity. An optional anatomical body mask $\mathbf{M}_{\text{body}}$, computed via Otsu thresholding followed by morphological closing, suppresses attention activation in non-anatomical regions (e.g., textual annotations or imaging artefacts in the periphery of the radiograph).
+    
+    \item \textbf{Pathway $\mathcal{P}_{\text{seg}}$ --- Segmentation Mask Prompting.} The bounding boxes $\{\mathbf{b}_k\}$ extracted from $\mathbf{A}$ serve as geometric prompts for a dedicated segmentation foundation model—specifically, a variant of the Segment Anything Model adapted for medical imaging (MedSAM). The segmentation model produces a dense binary mask $\mathbf{M}_{\text{seg}} \in \{0, 1\}^{H \times W}$ that delineates the anatomical boundaries of the region of interest with pixel-level precision. The prompted image is generated by overlaying the mask contour or a semi-transparent filled mask onto the original image:
+    
+    \[
+    \mathbf{I}'_{\text{seg}}(i,j) = \mathbf{M}_{\text{seg}}(i,j) \cdot \bigl[\beta \cdot c_{\text{mask}} + (1 - \beta) \cdot I(i,j)\bigr] + \bigl(1 - \mathbf{M}_{\text{seg}}(i,j)\bigr) \cdot I(i,j)
+    \]
+    
+    where $c_{\text{mask}} \in \mathbb{R}^3$ is the overlay colour and $\beta$ is the mask opacity. In the most advanced configuration, MedSAM3 accepts text prompts directly, enabling a complementary text-guided segmentation pathway that operates independently of the bounding box derivation.
+
+\end{itemize}
+
+All three pathways share the same upstream vision backbone (BiomedCLIP) for attention computation, which ensures consistency of the localisation signal. The segmentation pathway additionally invokes a second, independent foundation model (MedSAM / MedSAM2 / MedSAM3), creating a two-model cascade: BiomedCLIP provides the \textit{where} (localisation), while MedSAM provides the \textit{what} (precise anatomical delineation). This cascaded architecture is summarised schematically below:
+
+\[
+\mathbf{A} = \text{gScoreCAM}\!\bigl(\text{BiomedCLIP}(\mathbf{I}, q')\bigr) \;\longrightarrow\; \begin{cases} \mathcal{P}_{\text{bbox}}(\mathbf{A}) \to \mathbf{I}'_{\text{bbox}} \\[4pt] \mathcal{P}_{\text{heat}}(\mathbf{A}) \to \mathbf{I}'_{\text{heat}} \\[4pt] \mathcal{P}_{\text{seg}}\!\bigl(\text{MedSAM}(I, \mathbf{b}(\mathbf{A}))\bigr) \to \mathbf{I}'_{\text{seg}} \end{cases}
+\]
+
+\subsection{Mathematical Abstraction of the Pipeline}
+\label{sec:3_1_4}
+
+To support rigorous experimental analysis, the complete pipeline is here abstracted as a parameterised composite function over well-typed intermediate representations.
+
+Let $\mathcal{I} = \mathbb{R}^{H \times W \times C}$ denote the space of images, $\mathcal{Q} = \mathcal{V}^*$ the space of textual queries, and $\mathcal{A} = \mathcal{V}^*$ the space of natural-language answers. The four stages are typed as:
+
+\[
+\mathcal{S}_1 : \mathcal{Q} \to \mathcal{Q}' \quad \text{(Query Routing)}
+\]
+
+\[
+\mathcal{S}_2 : \mathcal{I} \times \mathcal{Q}' \to [0, 1]^{H \times W} \quad \text{(Visual Localisation)}
+\]
+
+\[
+\mathcal{S}_3^{(p)} : \mathcal{I} \times [0, 1]^{H \times W} \to \mathcal{I} \quad \text{(Visual Prompting, pathway } p \text{)}
+\]
+
+\[
+\mathcal{S}_4 : \mathcal{I} \times \mathcal{Q}' \to \mathcal{A} \quad \text{(VQA Inference)}
+\]
+
+where $p \in \{\text{bbox}, \text{heat}, \text{seg}\}$ indexes the visual prompting pathway. The complete pipeline for a given pathway $p$ is then:
+
+\[
+\mathcal{F}^{(p)}(\mathbf{I}, q) = \mathcal{S}_4\!\Bigl(\mathcal{S}_3^{(p)}\!\bigl(I,\; \mathcal{S}_2(I,\; \mathcal{S}_1(q))\bigr),\; \mathcal{S}_1(q)\Bigr)
+\]
+
+This formulation makes explicit that the enriched query $q' = \mathcal{S}_1(q)$ is consumed by both the localisation stage $\mathcal{S}_2$ and the final VQA stage $\mathcal{S}_4$, establishing a dual information pathway: one visual (through $\mathcal{S}_2$ and $\mathcal{S}_3$) and one textual (direct bypass from $\mathcal{S}_1$ to $\mathcal{S}_4$). The attention map $\mathbf{A} = \mathcal{S}_2(\mathbf{I}, q')$ acts as a shared latent representation—a spatial ``bottleneck''—from which all visual prompting strategies diverge.
+
+Each stage is governed by a set of hyperparameters $\theta_i$: for $\mathcal{S}_1$, these include the NER entity threshold and word-count threshold; for $\mathcal{S}_2$, the CAM variant, target layer index, and optional CRF parameters; for $\mathcal{S}_3^{(p)}$, the binarisation threshold $\tau$, blending coefficient $\alpha$, padding ratios, or segmentation model variant; and for $\mathcal{S}_4$, the choice of VLM and its generation hyperparameters. The full system is thus parameterised as:
+
+\[
+\mathcal{F}^{(p)}_{\Theta}(\mathbf{I}, q), \quad \Theta = (\theta_1, \theta_2, \theta_3^{(p)}, \theta_4)
+\]
+
+This parameterisation enables systematic grid-search experiments over the configuration space $\Theta$, the results of which are presented in Chapter 4.
+
+\section{Clinical Text Preprocessing: Named Entity Recognition via scispaCy}
+\label{sec:3_2}
+
+\subsection{The Problem: Inadequacy of Raw Clinical Queries for Visual Grounding}
+\label{sec:3_2_1}
+
+The efficacy of the Visual Grounding pipeline described in Section \ref{sec:3_1} is fundamentally contingent upon the quality of the textual query $q$ that drives the cross-modal attention mechanism. The attention map 
+$\mathbf{A} = \text{gScoreCAM}(\text{BiomedCLIP}(\mathbf{I}, q))$ is, by construction, a function of both the image and the text: a vague or underspecified query will produce a diffuse, uninformative attention map that fails to localise any clinically meaningful region, regardless of the quality of the visual encoder.
+
+In practice, clinical VQA datasets exhibit considerable heterogeneity in question quality. While some queries are highly specific and clinically rich (e.g., \textit{``Is there evidence of bilateral pleural effusion with associated compressive atelectasis in the lower lobes?''}), others are terse and ambiguous (e.g., \textit{``What is shown?''} or \textit{``Any findings?''}). The latter category poses a severe challenge for text-conditioned attention: the BiomedCLIP text encoder, which maps $q$ to a fixed-dimensional embedding $\mathbf{t} = f_{\text{text}}(q) \in \mathbb{R}^d$, will project such underspecified queries into a region of the embedding space that is poorly discriminative with respect to spatial features, yielding near-uniform attention distributions that carry no localisation signal.
+
+This problem is compounded by the domain specificity of medical language. General-purpose NLP models—including widely adopted NER systems such as those based on standard spaCy models or NLTK—are trained predominantly on news corpora, web text, and general-domain encyclopaedic sources. These models fail to recognise clinical entities such as anatomical structures (e.g., \textit{costophrenic angle}, \textit{cardiomediastinal silhouette}), pathological findings (e.g., \textit{consolidation}, \textit{pneumothorax}), and imaging-specific terminology (e.g., \textit{opacification}, \textit{air bronchograms}). A general-purpose tokeniser may parse \textit{``bilateral pleural effusion''} as three independent tokens without recognising the phrase as a single clinical entity, thereby losing the compositional semantics that are critical for precise visual grounding.
+
+The Clinical NLP Analysis stage ($\mathcal{S}_1$) is therefore designed to serve a dual function: (i) it \textit{evaluates} whether the raw query $q$ possesses sufficient clinical specificity to drive meaningful attention, and (ii) if the query is found deficient, it \textit{expends} it into a richer clinical prompt $q'$ via a generative language model. This section details the NER-based evaluation criterion that constitutes the first half of this mechanism.
+
+\subsection{Methodology: Biomedical NER with scispaCy}
+\label{sec:3_2_2}
+The evaluation of query quality is performed using \textbf{scispaCy}, a specialised extension of the spaCy NLP library that provides biomedical and clinical language models trained on large-scale scientific corpora. The specific model employed is \texttt{en\_core\_sci\_sm}, a lightweight pipeline (approximately 26 MB) that includes a tokeniser, a part-of-speech tagger, a dependency parser, and—critically—a Named Entity Recognition component trained on a combination of biomedical corpora including the GENIA corpus, the CRAFT corpus, and abstracts from PubMed.
+
+The \texttt{en\_core\_sci\_sm} model recognises entities belonging to the Unified Medical Language System (UMLS) semantic categories, encompassing:
+
+\begin{itemize}
+    \item \textbf{Anatomical structures}: \textit{lung}, \textit{pleura}, \textit{mediastinum}, \textit{costophrenic angle}, \textit{trachea};
+    \item \textbf{Pathological findings}: \textit{effusion}, \textit{consolidation}, \textit{pneumothorax}, \textit{cardiomegaly}, \textit{atelectasis};
+    \item \textbf{Medical procedures and devices}: \textit{endotracheal tube}, \textit{central venous catheter}, \textit{sternotomy};
+    \item \textbf{Clinical descriptors}: \textit{bilateral}, \textit{diffuse}, \textit{focal}, \textit{acute}, \textit{chronic}.
+\end{itemize}
+
+This domain-specific entity vocabulary is what distinguishes scispaCy from general-purpose alternatives: where a standard spaCy English model (\texttt{en\_core\_web\_sm}) would fail to identify \textit{``pleural effusion''} as a meaningful entity, the \texttt{en\_core\_sci\_sm} model correctly recognises it as a single biomedical named entity, thereby preserving its compositional clinical semantics.
+
+The NER extraction procedure is formalised as follows. Given a clinical query $q$, the scispaCy model $\mathcal{N}$ processes the text and produces a document object from which a set of named entities is extracted:
+
+$$
+\mathcal{E}(q) = \{e_1, e_2, \ldots, e_n\} = \text{NER}_{\mathcal{N}}(q)
+$$
+
+where each $e_i \in \mathcal{V}^+$ is a contiguous span of tokens recognised as a biomedical entity. The cardinality $|\mathcal{E}(q)| = n$ quantifies the clinical informativeness of the query.
+
+\subsection{Mathematical Framework: The Query Quality Decision Function}
+\label{sec:3_2_3}
+The decision as to whether a query $q$ requires expansion is governed by a binary decision function $\delta : \mathcal{Q} \to \{0, 1\}$ defined over two observable features: the number of detected clinical entities $n = |\mathcal{E}(q)|$ and the total word count $w = |q|_{\text{words}}$, computed as the number of whitespace-delimited tokens.
+
+The decision function implements a conjunctive threshold criterion:
+
+$$
+\delta(q) = \begin{cases} 1 & \text{if } |\mathcal{E}(q)| \geq \tau_e \;\;\text{and}\;\; |q|_{\text{words}} \geq \tau_w \\ 0 & \text{otherwise} \end{cases}
+$$
+
+where $\tau_e \in \mathbb{N}$ is the \textbf{entity threshold} (default: $\tau_e = 2$) and $\tau_w \in \mathbb{N}$ is the \textbf{word-count threshold} (default: $\tau_w = 5$). A query $q$ is classified as \textit{clinically detailed} (and thus passed through unchanged) if and only if $\delta(q) = 1$. Conversely, a query for which $\delta(q) = 0$ is classified as \textit{brief} and is routed to the generative expansion module.
+
+The conjunctive nature of this criterion is deliberate. The entity count condition alone would be insufficient, as a single-word medical term (e.g., \textit{``Pneumothorax?''}) may be parsed as one entity while still lacking the specificity required for grounded attention. Similarly, the word count condition alone would misclassify verbose but clinically vacuous queries (e.g., \textit{``Can you tell me what you see in this image?''}) as detailed. The conjunction of both conditions ensures that only queries possessing both sufficient lexical extent \textit{and} adequate clinical entity density are accepted without modification.
+
+The routing logic is then expressed as:
+
+$$
+q' = \mathcal{S}_1(q) = \begin{cases} q & \text{if } \delta(q) = 1 \\ \text{Expand}(q; \mathcal{G}) & \text{if } \delta(q) = 0 \end{cases}
+$$
+
+where $\text{Expand}(q; \mathcal{G})$ denotes the output of the generative expansion module (Gemma-2-2B-it, denoted $\mathcal{G}$), which rewrites the brief query into a detailed clinical prompt of up to $L_{\max} = 128$ new tokens, constrained to a single sentence by post-hoc truncation at the first newline character.
+
+\subsection{Implementation: NER Extraction and Conditional Routing}
+\label{sec:3_2_4}
+
+The implementation of the query quality evaluation and conditional routing logic is realised in two closely coupled functions. The first, \texttt{evaluate\_query\_quality}, encapsulates the NER extraction and the threshold-based decision:
+
+\begin{pythoncode}[Query Quality Evaluation]
+def evaluate_query_quality(
+    nlp,
+    query: str,
+    entity_threshold: int = 2,
+    word_threshold: int = 5,
+) -> Tuple[bool, List[str]]:
+    """
+    Evaluate whether a text query is detailed enough for visual grounding.
+
+    Heuristic:
+    - The query must contain at least `entity_threshold` clinical entities.
+    - The query must be at least `word_threshold` words long.
+    """
+    doc = nlp(query)
+    entities = [ent.text for ent in doc.ents]
+    word_count = len(query.split())
+
+    is_detailed = (
+        len(entities) >= entity_threshold and word_count >= word_threshold
+    )
+    return is_detailed, entities
+\end{pythoncode}
+
+The function accepts the preloaded scispaCy language model \texttt{nlp} (an instance of \texttt{en\_core\_sci\_sm}), the raw query string, and the two configurable thresholds. The scispaCy pipeline processes the query through its full NLP stack---tokenisation, POS tagging, dependency parsing, and NER---producing a \texttt{Doc} object from which entity spans are extracted as a list of surface-form strings. The word count is computed via whitespace tokenisation (\texttt{query.split()}), and the conjunctive threshold criterion $\delta(q)$ is evaluated. The function returns both the Boolean decision and the list of extracted entities, the latter being preserved in the output record for downstream traceability and analysis.
+
+The second component is the conditional routing logic within the main processing loop, which orchestrates the interaction between the quality evaluation and the generative expansion:
+
+\begin{pythoncode}[Conditional Routing Logic]
+# --- Step 1: Query Quality Evaluation ---
+is_detailed, entities = evaluate_query_quality(
+    nlp, query,
+    entity_threshold=args.entity_threshold,
+    word_threshold=args.word_threshold,
+)
+
+# --- Step 2: Conditional Query Expansion ---
+final_query = query
+was_expanded = False
+if not is_detailed:
+    final_query = expand_query(
+        gemma_model, gemma_tokenizer,
+        query,
+        max_new_tokens=args.gemma_max_new_tokens,
+    )
+    was_expanded = True
+\end{pythoncode}
+
+This excerpt illustrates the clean separation of concerns between the evaluation and expansion stages. The \texttt{evaluate\_query\_quality} function acts as a gatekeeper: only queries that fail the conjunctive threshold criterion are forwarded to the computationally expensive Gemma-2-2B-it generative model. This conditional routing yields significant computational savings, as the generative expansion is the most resource-intensive operation in Stage $\mathcal{S}_1$ (requiring GPU inference with approximately 5--6 GB of VRAM), whereas the scispaCy NER evaluation runs entirely on CPU with negligible latency.
+
+The output of Stage $\mathcal{S}_1$ is persisted as a JSONL file (\texttt{expanded\_queries.jsonl}) in which each record retains the original question in the \texttt{original\_question} field, the (potentially expanded) query in the \texttt{question} field, the Boolean \texttt{was\_expanded} flag, and the list of \texttt{entities\_detected}. This rich provenance information enables post-hoc analysis of the expansion rate and its correlation with downstream VQA performance.
+
+\subsection{Bridging to Vision: From Clinical Entities to Spatial Attention Anchors}
+\label{sec:3_2_5}
+
+The clinical entities extracted by scispaCy in Stage $\mathcal{S}_1$ serve a purpose that extends beyond the immediate routing decision. They constitute the \textbf{textual anchors} that drive the cross-modal attention mechanism in Stage $\mathcal{S}_2$. To understand this bridging role, it is necessary to consider how the BiomedCLIP text encoder processes the enriched query $q'$.
+
+BiomedCLIP employs a PubMedBERT-based text encoder $f_{\text{text}}$ that maps the tokenised query into a $d$-dimensional embedding:
+
+\[
+\mathbf{t} = f_{\text{text}}(q') \in \mathbb{R}^d
+\]
+
+This embedding is then compared against the spatial feature map produced by the ViT-B/16 visual encoder. In the gScoreCAM algorithm, the activation of the target layer (specifically, the output of the second layer normalisation in the final transformer block, \texttt{model.visual.trunk.blocks[11].norm2}) yields a spatial feature tensor $\mathbf{F} \in \mathbb{R}^{N \times d}$, where $N = (H/16) \times (W/16)$ is the number of spatial tokens in the ViT grid. The attention score for spatial position $j$ is computed as a function of the similarity between $\mathbf{t}$ and the channel-masked perturbations of $\mathbf{F}$, producing the final attention map:
+
+\[
+\mathbf{A}_{j} = \text{gScoreCAM}(\mathbf{F}, \mathbf{t})_j, \quad j \in \{1, \ldots, N\}
+\]
+
+The clinical entities in $q'$ directly influence the text embedding $\mathbf{t}$ and, consequently, the spatial distribution of attention. A query enriched with specific anatomical entities (e.g., \textit{``pleural effusion''}, \textit{``costophrenic angle''}) will produce a text embedding that is highly discriminative in BiomedCLIP's joint embedding space, activating spatial tokens that correspond to the relevant anatomical structures. Conversely, a vague query that has not undergone expansion will produce a text embedding in a poorly localised region of the joint space, resulting in diffuse or noisy attention.
+
+This establishes the critical link between the NLP preprocessing of Section \ref{sec:3_2} and the visual localisation of Section \ref{sec:3_3} (to follow): the quality of the attention map $\mathbf{A}$---and, by extension, the precision of all downstream visual prompts---is a direct function of the clinical specificity of the entities embedded in $q'$. The scispaCy NER module therefore acts not merely as a text filter, but as a \textbf{quality assurance mechanism} for the entire visual grounding pipeline, ensuring that the textual signal driving cross-modal attention is of sufficient clinical granularity to produce spatially meaningful localisation.
+
+\section{Attention Map Generation: BiomedCLIP Encoder and gScoreCAM}
+\label{sec:3_3}
+\subsection{The BiomedCLIP Vision-Language Backbone}
+\label{sec:3_3_1}
+
+\subsubsection{Architecture and Pretraining}
+\label{sec:3_3_1_1}
+
+The vision-language backbone employed throughout the pipeline is \textbf{BiomedCLIP} (\texttt{microsoft/BiomedCLIP-PubMedBERT\_256-vit\_base\_patch16\_224}), a contrastive learning model pretrained on the PMC-15M dataset---approximately 15 million figure-caption pairs from PubMed Central.  BiomedCLIP is a CLIP-style dual-encoder architecture in which a visual encoder and a textual encoder are jointly trained to maximise cosine similarity between matched image-text pairs while minimising it for unmatched pairs, thereby learning a shared, semantically aligned latent space.
+
+\textbf{Visual Encoder $f_{\text{vis}}$: Vision Transformer (ViT-B/16).} An input image $\mathbf{I} \in \mathbb{R}^{224 \times 224 \times 3}$ is partitioned into non-overlapping $16 \times 16$ patches, yielding $N = 196$ patch tokens.  Each patch is linearly projected into $\mathbb{R}^d$ ($d = 768$), a learnable CLS token $\mathbf{z}_{\text{CLS}}$ is prepended, and positional embeddings are added, producing a sequence of $197$ tokens. This sequence is processed through $L = 12$ transformer blocks in a pre-norm configuration:
+
+$$
+\mathbf{Z}^{(\ell)} = \text{FFN}\!\bigl(\text{LN}(\mathbf{H}^{(\ell)})\bigr) + \mathbf{H}^{(\ell)}, \quad \mathbf{H}^{(\ell)} = \text{MHSA}\!\bigl(\text{LN}(\mathbf{Z}^{(\ell-1)})\bigr) + \mathbf{Z}^{(\ell-1)}
+$$
+
+for $\ell = 1, \ldots, 12$. The final image embedding is:
+
+$$
+\mathbf{v} = \text{Proj}_{\text{vis}}\!\bigl(\mathbf{Z}^{(12)}_{\text{CLS}}\bigr) \in \mathbb{R}^d
+$$
+
+\textbf{Textual Encoder $f_{\text{text}}$: PubMedBERT.} A domain-specific BERT model pretrained on PubMed abstracts receives the tokenised query $q'$ (max sequence length $256$) and produces a text embedding via [CLS] pooling:
+
+$$
+\mathbf{t} = f_{\text{text}}(q') \in \mathbb{R}^d
+$$
+
+PubMedBERT's vocabulary and representations are tuned on biomedical text, enabling high-fidelity encoding of the clinical entities produced by the scispaCy NER module of Section \ref{sec:3_2}.
+
+\subsubsection{Cross-Modal Similarity Computation}
+\label{sec:3_3_1_2}
+
+The two encoders are united through a contrastive similarity objective. Given $\ell_2$-normalised embeddings, the model computes their dot-product similarity scaled by a learned temperature $\lambda$:
+
+$$
+s(\mathbf{I}, q') = \lambda \cdot \hat{\mathbf{v}}^{\top} \hat{\mathbf{t}}, \quad \hat{\mathbf{v}} = \frac{\mathbf{v}}{\|\mathbf{v}\|_2}, \quad \hat{\mathbf{t}} = \frac{\mathbf{t}}{\|\mathbf{t}\|_2}
+$$
+
+where $\lambda = \exp(\text{logit\_scale})$ is a learned parameter that sharpens discrimination between matched and unmatched pairs. The \texttt{BiomedCLIPWrapper} class encapsulates this computation:
+
+\begin{pythoncode}[BiomedCLIPWrapper]
+class BiomedCLIPWrapper(nn.Module):
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+        self.text_embeddings = None
+
+    def set_text(self, text_tokens: torch.Tensor):
+        with torch.no_grad():
+            emb = self.model.encode_text(text_tokens)
+            self.text_embeddings = emb / emb.norm(dim=-1, keepdim=True)
+
+    def forward(self, images: torch.Tensor, texts=None) -> torch.Tensor:
+        image_embeddings = self.model.encode_image(images)
+        image_embeddings = image_embeddings / image_embeddings.norm(
+            dim=-1, keepdim=True
+        )
+        logit_scale = self.model.logit_scale.exp()
+        logits = logit_scale * image_embeddings @ self.text_embeddings.t()
+        return logits
+\end{pythoncode}
+
+A critical design decision is the \textbf{decoupling of text encoding from the visual forward pass}: the text embedding $\hat{\mathbf{t}}$ is pre-computed and cached via \texttt{set\_text()} before CAM computation. This is necessitated by the \texttt{pytorch-grad-cam} library, which requires the model's \texttt{forward()} to accept only the image tensor. During ScoreCAM perturbation (Section \ref{sec:3_3_2}), the visual encoder is executed multiple times while the text embedding remains fixed---semantically correct (the query is invariant across perturbations) and computationally efficient (the text encoder is invoked only once).
+
+The output is a similarity logit matrix $\mathbf{S} \in \mathbb{R}^{B_I \times B_T}$. In single-prompt mode, $B_T = 1$ and $\mathbf{S}$ is a column vector. In composite multi-region mode, $B_T = B_I = N$ and each diagonal element $\mathbf{S}_{i,i}$ encodes the similarity between image $i$ and its corresponding prompt $i$, targeted via \texttt{ClassifierOutputTarget(i)}.
+
+\subsection{The gScoreCAM Algorithm}
+\label{sec:3_3_2}
+
+\subsubsection{Motivation: Gradient-Free Attribution for Vision Transformers}
+\label{sec:3_3_2_1}
+
+Classical Grad-CAM computes the gradient of the target score with respect to a convolutional layer's activation maps, using these gradients as importance weights. While effective for CNNs, this approach is problematic for Vision Transformers: the global self-attention mechanism breaks the locality assumption underpinning Grad-CAM, and gradients in deep transformers suffer from saturation and noise propagation, yielding diffuse, unreliable saliency maps.
+
+ \textbf{ScoreCAM} (and its grouped variant, \textbf{gScoreCAM}) eliminates gradient dependency entirely via a \textbf{perturbation-based} strategy: each channel of the target layer's activation is used as a spatial mask on the input, and the resulting change in the model's output score is measured directly through forward passes. This is inherently more stable for ViTs, as it evaluates the functional impact of each feature channel without relying on backpropagated gradients.
+
+\subsubsection{Mathematical Formulation}
+
+Let $\mathbf{F}^{(\ell)} \in \mathbb{R}^{D \times h \times w}$ denote the activation tensor at target layer $\ell$, where $D = 768$ is the channel dimension and $h \times w = 14 \times 14$ is the spatial resolution after the reshape transform. For each channel $k \in \{1, \ldots, D\}$, the spatial activation slice $\mathbf{F}_k^{(\ell)} \in \mathbb{R}^{h \times w}$ is min-max normalised:
+
+\[
+\hat{\mathbf{F}}_k = \frac{\mathbf{F}_k^{(\ell)} - \min(\mathbf{F}_k^{(\ell)})}{\max(\mathbf{F}_k^{(\ell)}) - \min(\mathbf{F}_k^{(\ell)}) + \epsilon}
+\]
+
+The normalised activation is upsampled to input resolution and used as a soft spatial mask:
+
+\[
+\mathbf{I}_k^{\text{masked}} = \hat{\mathbf{F}}_k^{\uparrow} \odot I
+\]
+
+where $\odot$ denotes element-wise multiplication broadcast across channels. The weight $w_k$ is defined as the \textbf{increase in confidence} induced by the masked image relative to a baseline:
+
+\[
+w_k = s\!\left(\mathbf{I}_k^{\text{masked}}, q'\right) - s\!\left(I_{\text{baseline}}, q'\right)
+\]
+
+The final attention map is a ReLU-gated weighted sum of all normalised activations:
+
+\[
+\mathbf{A} = \text{ReLU}\!\left(\sum_{k=1}^{D} w_k \cdot \hat{\mathbf{F}}_k^{\uparrow}\right)
+\]
+
+\subsubsection{Grouped ScoreCAM (gScoreCAM): Computational Efficiency}
+
+Standard ScoreCAM requires $D$ forward passes—one per channel. For $D = 768$, this is computationally expensive. \textbf{gScoreCAM} reduces this cost by selecting the top-$G$ channels ranked by spatial activation variance (controlled by the \texttt{topk} parameter, defaulting to $300$). Channels with low variance carry no localisation signal and are discarded:
+
+\[
+\mathbf{A} = \text{ReLU}\!\left(\sum_{k \in \mathcal{T}_G} w_k \cdot \hat{\mathbf{F}}_k^{\uparrow}\right), \quad |\mathcal{T}_G| = \min(G, D)
+\]
+
+\subsection{Target Layer Selection and Feature Extraction}
+
+ The target layer is set to the \textbf{second layer normalisation (\texttt{norm2}) of the final transformer block}:
+
+\begin{pythoncode}[Target Layer Selection]
+target_layer = self.clip_model.model.visual.trunk.blocks[11].norm2
+\end{pythoncode}
+
+The final block encodes the richest semantic-spatial representations, as $12$ successive self-attention layers have aggregated both local texture and global context. Within this block, \texttt{norm2}—applied after the FFN—captures the complete transformed representation:
+
+\[
+\mathbf{Z}^{(12)}_{\text{norm2}} = \text{LN}\!\left(\text{FFN}\!\bigl(\text{LN}(\mathbf{H}^{(12)})\bigr) + \mathbf{H}^{(12)}\right)
+\]
+
+This tensor of shape $(B, 197, 768)$ is reshaped into a spatial activation tensor $\mathbf{F}^{(\ell)} \in \mathbb{R}^{B \times 768 \times 14 \times 14}$ by the \texttt{reshape\_transform} function: the CLS token is removed, the $196$ remaining tokens are arranged into a $14 \times 14$ grid, and the tensor is permuted to $(B, D, H, W)$:
+
+\begin{pythoncode}[Reshape Transform Function]
+def reshape_transform(tensor, height=None, width=None):
+    patches = tensor[:, 1:, :]  # Remove CLS token
+    num_patches = patches.shape[1]
+    grid_side = int(num_patches ** 0.5)
+    height = width = grid_side
+    result = patches.reshape(
+        tensor.shape[0], height, width, tensor.shape[2]
+    )
+    result = result.permute(0, 3, 1, 2)  # (B, D, H, W)
+    return result
+\end{pythoncode}
+
+Each position in the $14 \times 14$ grid has a nominal $16 \times 16$ receptive field but an effective receptive field spanning the entire image due to global self-attention, enabling BiomedCLIP to attend to anatomically distributed findings from any single spatial token.
+
+\subsection{Pipeline Initialisation and Batch Inference}
+
+The \texttt{BiomedCLIPInferencePipeline} class encapsulates model loading, tokeniser configuration, target layer selection, and CAM wrapper instantiation:
+
+\begin{pythoncode}[BiomedCLIPInferencePipeline]
+class BiomedCLIPInferencePipeline:
+    def __init__(self, args, device='cuda'):
+        self.device = device
+        self.cam_version = args.cam_version  # Default: 'gScoreCAM'
+
+        _, _, _, self.cam_transform, _ = load_clip(args.clip_version)
+        biomed_core, self.preprocess = open_clip.create_model_from_pretrained(
+            args.model_name  # 'hf-hub:microsoft/BiomedCLIP-...'
+        )
+        self.tokenizer = SafeBiomedTokenizer(args.model_name)
+        biomed_core.to(self.device).eval()
+        self.clip_model = BiomedCLIPWrapper(biomed_core)
+
+        target_layer = self.clip_model.model.visual.trunk.blocks[11].norm2
+        self.cam_wrapper = BatchCAMWrapper(
+            model=self.clip_model,
+            target_layers=[target_layer],
+            tokenizer=self.tokenizer,
+            cam_version=self.cam_version,
+            topk=args.topk,
+            is_transformer=True,
+            cam_trans=self.cam_transform
+        )
+\end{pythoncode}
+
+The model is loaded via OpenCLIP's HuggingFace Hub interface. The \texttt{SafeBiomedTokenizer} wrapper strips the \texttt{hf-hub:} prefix for compatibility with \texttt{AutoTokenizer}, configuring a max sequence length of 256 tokens. The \texttt{load\_clip} utility detects ViT architectures and assigns the \texttt{reshape\_transform} accordingly.
+
+Batch inference is handled by \texttt{process\_batch}, which distinguishes two cases. In \textbf{Case A} (uniform prompts), a single text embedding is cached and the entire batch is processed simultaneously. In \textbf{Case B} (composite multi-region mode), each image is paired with a distinct anatomical prompt. All $N$ text embeddings are computed in one batched call, producing the similarity matrix:
+
+$$
+\mathbf{S} = \lambda \cdot \hat{\mathbf{V}} \, \hat{\mathbf{T}}^{\top}
+$$
+
+where $\hat{\mathbf{V}} \in \mathbb{R}^{N \times d}$ and $\hat{\mathbf{T}} \in \mathbb{R}^{N \times d}$. The \texttt{ClassifierOutputTarget(i)} directive ensures that the CAM for the $i$-th image targets the diagonal element $\mathbf{S}_{i,i}$, correctly attributing each region-specific attention map to its paired prompt.
+
+\subsection{Post-Processing: Normalisation, Masking, and CRF Refinement}
+
+The raw attention map $\mathbf{A}_{\text{raw}}$ on the $14 \times 14$ ViT grid must be post-processed before consumption by the downstream visual prompting pathways (Section \ref{sec:3_1_3}) or binarisation for bounding box extraction (Section \ref{sec:3_4}).
+
+\subsubsection{Anatomical Body Masking}
+
+
+Radiographic images frequently contain non-anatomical artefacts (patient identification text, laterality markers, collimation borders) that can produce spurious attention activations. An optional \textbf{anatomical body mask} $\mathbf{M}_{\text{body}} \in \{0, 1\}^{H \times W}$ is computed in three stages:
+
+\textbf{Stage A --- Body Detection.} Otsu's method automatically determines a binarisation threshold maximising between-class variance:
+
+$$
+\tau^{*} = \arg\max_{\tau} \, \sigma^2_B(\tau)
+$$
+
+The mask is refined via morphological closing ($5 \times 5$ kernel, 4 iterations) to fill intrabody holes, followed by dilation (2 iterations) for a conservative margin.
+
+\textbf{Stage B --- White Artefact Detection.} Pixels exceeding intensity 245 (on $[0, 255]$) are identified as digital text or markers and dilated ($3 \times 3$ kernel, 4 iterations) to cover anti-aliased edges, producing $\mathbf{M}_{\text{glare}}$.
+
+\textbf{Stage C --- Fusion.} The final mask is the set difference:
+
+$$
+\mathbf{M}_{\text{body}} = \mathbf{M}_{\text{Otsu}} \setminus \mathbf{M}_{\text{glare}}
+$$
+
+The mask is resized to CAM resolution via nearest-neighbour interpolation and applied element-wise:
+
+$$
+\mathbf{A}_{\text{masked}} = \mathbf{A}_{\text{raw}} \odot \mathbf{M}_{\text{body}}^{\downarrow}
+$$
+
+\subsubsection{Min-Max Normalisation}
+
+The masked map is normalised to $[0, 1]$:
+
+$$
+\mathbf{A}_{\text{norm}}(i,j) = \frac{\mathbf{A}_{\text{masked}}(i,j) - \min(\mathbf{A}_{\text{masked}})}{\max(\mathbf{A}_{\text{masked}}) - \min(\mathbf{A}_{\text{masked}}) + \epsilon}
+$$
+
+where $\epsilon = 10^{-8}$. If $\max - \min \leq \epsilon$, the map is zeroed (no localisation signal detected). The normalised map is then bilinearly upsampled to the original resolution:
+
+$$
+\mathbf{A} = \text{Resize}(\mathbf{A}_{\text{norm}}, H, W)
+$$
+
+This $\mathbf{A} \in [0, 1]^{H \times W}$ is the canonical output of Stage $\mathcal{S}_2$: for the heatmap pathway ($\mathcal{P}_{\text{heat}}$), it is directly colourmap-rendered and alpha-blended; for the bounding box ($\mathcal{P}_{\text{bbox}}$) and segmentation ($\mathcal{P}_{\text{seg}}$) pathways, it undergoes binarisation as described in Section \ref{sec:3_4}.
+
+\subsubsection{Dense CRF Refinement (Optional)}
+
+
+For the bounding box pathway, fixed-threshold binarisation of $\mathbf{A}$ often produces fragmented boundaries, particularly for diffuse findings. An optional \textbf{Dense CRF} post-processing step refines the map before binarisation.
+
+The CRF operates on a two-class formulation with unary potentials derived from the attention map:
+
+$$
+U_{\text{fg}}(i,j) = -\log\!\bigl(\mathbf{A}_{\text{norm}}(i,j) + \epsilon\bigr), \quad U_{\text{bg}}(i,j) = -\log\!\bigl(1 - \mathbf{A}_{\text{norm}}(i,j) + \epsilon\bigr)
+$$
+
+Pairwise potentials enforce spatial smoothness via two kernels. A \textbf{Gaussian kernel} ($\sigma_{\text{xy}} = 15$, $\mu_{\text{G}} = 2$) penalises label disagreements between proximate pixels:
+
+$$
+\psi_{\text{G}}(\mathbf{p}, \mathbf{p}') = \mu_{\text{G}} \cdot \exp\!\left(-\frac{\|\mathbf{p} - \mathbf{p}'\|^2}{2\sigma_{\text{xy}}^2}\right)
+$$
+
+A \textbf{bilateral kernel} ($\sigma_{\text{xy}}^{\text{bil}} = 15$, $\sigma_{\text{rgb}} = 5$, $\mu_{\text{B}} = 3$) additionally conditions on image appearance:
+
+$$
+\psi_{\text{B}}(\mathbf{p}, \mathbf{p}') = \mu_{\text{B}} \cdot \exp\!\left(-\frac{\|\mathbf{p} - \mathbf{p}'\|^2}{2\sigma_{\text{xy}}^{\text{bil}\,2}} - \frac{\|I(\mathbf{p}) - I(\mathbf{p}')\|^2}{2\sigma_{\text{rgb}}^2}\right)
+$$
+
+Mean-field inference is performed for $M = 6$ iterations, yielding a refined foreground probability map for contour extraction and bounding box generation in Section \ref{sec:3_4}.
+
+
+
+\label{sec:3_4}

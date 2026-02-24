@@ -124,6 +124,15 @@ def _init_wandb_safe(**kwargs):
             
         return MockWandB()
 
+def _count_jsonl_rows(path: Path) -> int:
+    """Count the number of lines in a JSONL file."""
+    count = 0
+    with open(path, "r") as f:
+        for _ in f:
+            count += 1
+    return count
+
+
 def process_dataset(args, models: Dict[str, Any]) -> None:
     """Process the dataset row-by-row with query evaluation and expansion."""
     # Unpack models
@@ -143,6 +152,19 @@ def process_dataset(args, models: Dict[str, Any]) -> None:
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
     jsonl_path = output_root / "expanded_queries.jsonl"
+
+    # --- Cache check: skip if output already matches expected row count ---
+    expected_rows = len(df)
+    if jsonl_path.exists():
+        existing_rows = _count_jsonl_rows(jsonl_path)
+        if existing_rows == expected_rows:
+            print(f"\n[SKIP] expanded_queries.jsonl already exists with {existing_rows} rows "
+                  f"(matches expected {expected_rows}). Skipping generation.")
+            return
+        else:
+            print(f"\n[INFO] Stale expanded_queries.jsonl found ({existing_rows} rows, "
+                  f"expected {expected_rows}). Deleting and regenerating.")
+            jsonl_path.unlink()
 
     # Counters
     total = len(df)

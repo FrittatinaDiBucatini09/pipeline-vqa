@@ -134,5 +134,6 @@ docker run \
     -e VQA_IMAGE_PATH="$DOCKER_VQA_IMAGE_PATH" \
     -e HF_TOKEN="$HF_TOKEN" \
     -e DATA_FILE_OVERRIDE="${DATA_FILE_OVERRIDE:-}" \
+    -e PREPROC_TYPE="${PREPROC_TYPE:-}" \
     "$IMAGE_NAME" \
     /bin/bash /workspace/scripts/run_generation.sh "$CONFIG_FILE"

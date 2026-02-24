@@ -8,7 +8,7 @@ import numpy as np
 import json
 import argparse
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Union
+from typing import List, Dict, Tuple, Union
 from tqdm import tqdm
 import re
 from datetime import datetime
@@ -79,6 +79,31 @@ FEW_SHOT_TEMPLATE = """
 Question: {question}
 Answer: {answer}
 """
+
+# Preprocessing-aware prompt context injected before the main prompt
+# when images have been preprocessed by a specific pipeline stage.
+PREPROC_CONTEXT = {
+    "attn_map": (
+        "**Visual Context:** This image contains a heatmap overlay representing "
+        "Attention Weights from a visual model. Higher intensity areas (hotter colors "
+        "such as red and yellow) indicate regions where the model focused its visual "
+        "processing, highlighting areas of clinical saliency. Cooler colors (blue) "
+        "indicate lower attention. Use these attention cues to guide your analysis.\n\n"
+    ),
+    "bbox_preproc": (
+        "**Visual Context:** Specific regions of interest in this image have been "
+        "localized. The relevant findings or objects are enclosed in **red/fuchsia "
+        "bounding boxes**. Focus your analysis on the content within these bounding "
+        "boxes, as they highlight the most clinically relevant areas.\n\n"
+    ),
+    "segmentation": (
+        "**Visual Context:** This image features precise anatomical or pathological "
+        "segmentation. The segmented areas of interest are highlighted in **green**, "
+        "and are further encapsulated by an **azure (light blue) bounding box**. "
+        "Focus your analysis on the segmented regions, as they delineate the "
+        "clinically relevant structures.\n\n"
+    ),
+}
 
 def load_image(source: Union[str, Image.Image, dict]) -> Image.Image:
     """
@@ -390,6 +415,124 @@ def parse_answer(response: str, use_cot: bool = False, verbose: bool = False) ->
     return answer
 
 
+def clean_octomed_response(response: str, verbose: bool = False) -> str:
+    """Extract the effective answer from OctoMed-7B reasoning output.
+
+    OctoMed produces output in the format: <think>...</think> \\boxed{Answer}
+    This cleaner extracts only the final answer for downstream evaluation.
+
+    Strategy:
+      1. Primary: Extract content inside \\boxed{}
+      2. Fallback 1: Remove <think>...</think> tags, return remaining text
+      3. Fallback 2: Return full response if no tags found
+
+    Args:
+        response: Raw model response
+        verbose: Print extraction details
+
+    Returns:
+        Cleaned answer string
+    """
+    try:
+        response = response.strip()
+
+        # Primary: extract from \boxed{...}
+        # Handle nested braces by counting depth
+        boxed_match = re.search(r'\\boxed\{', response)
+        if boxed_match:
+            start = boxed_match.end()
+            depth = 1
+            i = start
+            while i < len(response) and depth > 0:
+                if response[i] == '{':
+                    depth += 1
+                elif response[i] == '}':
+                    depth -= 1
+                i += 1
+            if depth == 0:
+                answer = response[start:i-1].strip()
+                if answer:
+                    if verbose:
+                        print(f"[OctoMed Clean] Extracted from \\boxed{{}}: '{answer[:100]}...'")
+                    return answer
+
+        # Fallback 1: remove <think>...</think> and return the rest
+        think_pattern = re.compile(r'<think>.*?</think>', re.DOTALL)
+        if '<think>' in response:
+            cleaned = think_pattern.sub('', response).strip()
+            # Also strip any remaining \boxed wrapper that wasn't matched above
+            cleaned = re.sub(r'\\boxed\{(.*)\}', r'\1', cleaned, flags=re.DOTALL).strip()
+            if cleaned:
+                if verbose:
+                    print(f"[OctoMed Clean] Extracted outside <think> tags: '{cleaned[:100]}...'")
+                return cleaned
+
+        # Fallback 2: return full response
+        if verbose:
+            print(f"[OctoMed Clean] No special format found, returning full response")
+        return response
+
+    except Exception as e:
+        print(f"[OctoMed Clean] WARNING: Extraction failed ({e}), returning raw response")
+        return response
+
+
+def is_octomed_model(model_name: str) -> bool:
+    """Check if the model is OctoMed based on model name."""
+    return 'octomed' in model_name.lower()
+
+
+def save_checkpoint(predictions: list, output_dir: str, model_name: str, checkpoint_num: int):
+    """Save a checkpoint of predictions to disk.
+
+    Args:
+        predictions: List of prediction dicts to save
+        output_dir: Directory to write checkpoint files
+        model_name: Model name for filename
+        checkpoint_num: Checkpoint sequence number
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    clean_model_name = model_name.replace('/', '_').replace('\\', '_').replace(':', '_')
+    checkpoint_file = output_path / f"checkpoint_{clean_model_name}_{checkpoint_num:04d}.json"
+
+    with open(checkpoint_file, 'w', encoding='utf-8') as f:
+        json.dump(predictions, f, ensure_ascii=False)
+
+    print(f"[CHECKPOINT] Saved {len(predictions)} samples to {checkpoint_file.name}")
+
+
+def merge_checkpoints(output_dir: str, model_name: str) -> list:
+    """Merge all checkpoint files into a single list and clean up.
+
+    Args:
+        output_dir: Directory containing checkpoint files
+        model_name: Model name used in filenames
+
+    Returns:
+        Merged list of all predictions
+    """
+    clean_model_name = model_name.replace('/', '_').replace('\\', '_').replace(':', '_')
+    pattern = os.path.join(output_dir, f"checkpoint_{clean_model_name}_*.json")
+    checkpoint_files = sorted(glob.glob(pattern))
+
+    if not checkpoint_files:
+        return []
+
+    all_predictions = []
+    for cp_file in checkpoint_files:
+        with open(cp_file, 'r', encoding='utf-8') as f:
+            all_predictions.extend(json.load(f))
+
+    # Clean up checkpoint files
+    for cp_file in checkpoint_files:
+        os.remove(cp_file)
+
+    print(f"[CHECKPOINT] Merged {len(checkpoint_files)} checkpoints ({len(all_predictions)} total samples)")
+    return all_predictions
+
+
 def parse_gold_answer(gold_answer: str) -> str:
     """Parse gold standard answer from the dataset."""
     if pd.isna(gold_answer) or gold_answer.strip() == '':
@@ -695,7 +838,7 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
                               use_few_shot: bool = False, num_few_shot: int = 5,
                               few_shot_seed: int = 42, test_df: pd.DataFrame = None,
                               image_column: str = 'image', question_column: str = 'question',
-                              images_dir: str = None) -> List[List[Dict]]:
+                              images_dir: str = None, preproc_type: str = None) -> List[List[Dict]]:
     """Prepare chat conversations for batch inference using chat templates.
 
     Args:
@@ -710,6 +853,8 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
         image_column: Name of the image column in the dataset
         question_column: Name of the question column in the dataset
         images_dir: Directory to save images (if processing from HuggingFace dataset)
+        preproc_type: Preprocessing type for prompt context injection
+                      (attn_map, bbox_preproc, segmentation, or None for baseline)
     """
     conversations = []
 
@@ -739,6 +884,10 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
             question=formatted_question,
             few_shot_examples=few_shot_examples
         )
+
+        # Inject preprocessing context if applicable
+        if preproc_type and preproc_type in PREPROC_CONTEXT:
+            user_message_text = PREPROC_CONTEXT[preproc_type] + user_message_text
 
         if use_images:
             # Handle image loading and saving
@@ -820,33 +969,119 @@ def prepare_chat_conversations(df: pd.DataFrame, use_cot: bool = False, use_imag
 
     return conversations
 
-def run_chat_inference(model: LLM, conversations: List[List[Dict]], sampling_params: SamplingParams, batch_size: int = 32, enable_thinking : bool = False) -> List[str]:
-    """Run batch inference using chat templates with vLLM."""
+def run_chat_inference(model: LLM, conversations: List[List[Dict]], sampling_params: SamplingParams,
+                       batch_size: int = 32, enable_thinking: bool = False,
+                       checkpoint_interval: int = 0, checkpoint_dir: str = None,
+                       model_name: str = None, df: pd.DataFrame = None,
+                       args: argparse.Namespace = None, gold_answers: List[str] = None,
+                       use_octomed_clean: bool = False) -> Tuple[List[str], List[dict]]:
+    """Run batch inference using chat templates with vLLM, with optional periodic checkpointing.
+
+    When checkpoint_interval > 0, saves processed results every N samples to disk
+    and clears them from memory to prevent GPU/RAM bloat during long runs.
+
+    Returns:
+        Tuple of (all_responses, detailed_predictions).
+        If checkpointing is disabled, detailed_predictions is an empty list
+        (caller builds predictions as before).
+    """
     print(f"Running chat inference on {len(conversations)} conversations with batch size {batch_size}")
-    
+    if checkpoint_interval > 0:
+        print(f"[CHECKPOINT] Enabled: saving every {checkpoint_interval} samples to {checkpoint_dir}")
+
     all_responses = []
-    
+    pending_predictions = []  # Accumulate between checkpoints
+    checkpoint_count = 0
+    total_processed = 0
+    checkpointing = checkpoint_interval > 0 and checkpoint_dir and df is not None and args is not None
+
+    # Determine image save dir for prediction records
+    images_save_dir = args.images_dir if args and args.dataset_name and args.use_images else None
+
     # Process in batches
     for i in tqdm(range(0, len(conversations), batch_size), desc="Running chat inference"):
         batch_conversations = conversations[i:i+batch_size]
-        
+
         # Generate responses for the batch using chat method
         outputs = model.chat(
             batch_conversations,
             sampling_params=sampling_params,
             use_tqdm=False,
-            chat_template_kwargs={"enable_thinking":enable_thinking}
+            chat_template_kwargs={"enable_thinking": enable_thinking}
         )
-        
+
         # Extract generated text
         batch_responses = []
         for output in outputs:
             generated_text = output.outputs[0].text
             batch_responses.append(generated_text)
-        
+
         all_responses.extend(batch_responses)
-    
-    return all_responses
+
+        # Build prediction records for checkpointing
+        if checkpointing:
+            for j, response_text in enumerate(batch_responses):
+                sample_idx = i + j
+                if sample_idx >= len(df):
+                    break
+                row = df.iloc[sample_idx]
+
+                # Parse the answer
+                parsed = parse_answer(response_text, use_cot=args.use_cot)
+                if use_octomed_clean:
+                    parsed = clean_octomed_response(parsed, verbose=(total_processed < 3))
+
+                # Gold answer
+                gold = gold_answers[sample_idx] if gold_answers else ""
+                correct = gold.lower().strip() == parsed.lower().strip() if gold else False
+
+                # Image reference
+                if images_save_dir:
+                    image_ref = os.path.join(images_save_dir, f"{sample_idx:06d}.png")
+                else:
+                    img_val = row[args.image_column]
+                    image_ref = img_val if isinstance(img_val, str) else f"sample_{sample_idx}"
+
+                pending_predictions.append({
+                    'image_file': image_ref,
+                    'question': row[args.question_column],
+                    'reference_answer': gold,
+                    'predicted_answer': parsed,
+                    'raw_response': response_text[:200] + "..." if len(response_text) > 200 else response_text,
+                    'full_response': response_text,
+                    'correct': correct,
+                    'use_cot': args.use_cot,
+                    'use_images': args.use_images,
+                    'use_few_shot': args.use_few_shot,
+                    'num_few_shot': args.num_few_shot if args.use_few_shot else 0,
+                    'answer_length': len(parsed),
+                    'response_length': len(response_text)
+                })
+                total_processed += 1
+
+            # Flush to disk when we hit the checkpoint interval
+            if len(pending_predictions) >= checkpoint_interval:
+                checkpoint_count += 1
+                save_checkpoint(pending_predictions, checkpoint_dir, model_name or "model", checkpoint_count)
+                pending_predictions.clear()
+                import gc
+                gc.collect()
+
+        # Release vLLM output references
+        del outputs
+
+    # Flush any remaining predictions
+    if checkpointing and pending_predictions:
+        checkpoint_count += 1
+        save_checkpoint(pending_predictions, checkpoint_dir, model_name or "model", checkpoint_count)
+        pending_predictions.clear()
+
+    # If checkpointing was used, merge all checkpoint files
+    merged_predictions = []
+    if checkpointing and checkpoint_count > 0:
+        merged_predictions = merge_checkpoints(checkpoint_dir, model_name or "model")
+
+    return all_responses, merged_predictions
 
 def main():
     parser = argparse.ArgumentParser(
@@ -918,6 +1153,21 @@ def main():
     parser.add_argument('--few_shot_source', type=str, default=None,
                        help='Optional separate data source for few-shot examples (dataset name or JSON file)')
 
+    # Preprocessing context injection
+    parser.add_argument('--preproc_type', type=str, default=None,
+                       choices=['attn_map', 'bbox_preproc', 'segmentation'],
+                       help='Preprocessing type for prompt context injection (set by orchestrator bridge)')
+
+    # Multimodal vision settings (model-specific pixel limits)
+    parser.add_argument('--min_pixels', type=int, default=None,
+                       help='Minimum pixel count for vision encoder (e.g., 262144 for OctoMed)')
+    parser.add_argument('--max_pixels', type=int, default=None,
+                       help='Maximum pixel count for vision encoder (e.g., 262144 for OctoMed)')
+
+    # Checkpointing arguments
+    parser.add_argument('--checkpoint_interval', type=int, default=0,
+                       help='Save checkpoint every N samples (0 = disabled)')
+
     # Output control arguments
     parser.add_argument('--save_generations', action='store_true',
                        help='Save model generations to file (default: False)')
@@ -948,6 +1198,11 @@ def main():
     print(f"Use Chain-of-Thought: {'Enabled' if args.use_cot else 'Disabled'}")
     print(f"Enable Thinking Mode: {'Enabled' if args.enable_thinking else 'Disabled'}")
     print(f"Use Images (Multimodal): {'Enabled' if args.use_images else 'Disabled'}")
+    if args.min_pixels or args.max_pixels:
+        print(f"Min Pixels: {args.min_pixels}")
+        print(f"Max Pixels: {args.max_pixels}")
+    print(f"Preprocessing Context: {args.preproc_type if args.preproc_type else 'None (baseline)'}")
+    print(f"Checkpoint Interval: {args.checkpoint_interval if args.checkpoint_interval > 0 else 'Disabled'}")
     print(f"Use Few-Shot Prompting: {'Enabled' if args.use_few_shot else 'Disabled'}")
     if args.use_few_shot:
         print(f"  Number of Examples: {args.num_few_shot}")
@@ -966,10 +1221,20 @@ def main():
     # Build model initialization parameters
     model_init_kwargs = {
         "model": args.model_name,
-        "max_model_len": 8192,
+        "max_model_len": 16384,  # Set a high max model length to accommodate long CoT responses
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "trust_remote_code": args.trust_remote_code,
     }
+
+    # Pass vision processor pixel limits if specified (e.g., for OctoMed-7B)
+    if args.min_pixels is not None or args.max_pixels is not None:
+        mm_kwargs = {}
+        if args.min_pixels is not None:
+            mm_kwargs["min_pixels"] = args.min_pixels
+        if args.max_pixels is not None:
+            mm_kwargs["max_pixels"] = args.max_pixels
+        model_init_kwargs["mm_processor_kwargs"] = mm_kwargs
+        print(f"Vision processor kwargs: {mm_kwargs}")
 
     # Set up allowed local media paths for image loading
     if args.use_images:
@@ -989,13 +1254,22 @@ def main():
         model = LLM(**model_init_kwargs)
 
         # Set up sampling parameters
+        # OctoMed uses <think>...</think> reasoning — do not truncate with stop tokens
+        use_octomed = is_octomed_model(args.model_name)
+        if use_octomed:
+            stop_tokens = None  # Let the model finish its reasoning naturally
+        elif args.use_cot:
+            stop_tokens = ["**STEP 5:"]
+        else:
+            stop_tokens = ["\n\n"]
+
         sampling_params = SamplingParams(
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             top_k=args.top_k,
             top_p=args.top_p,
             min_p=args.min_p,
-            stop=["\n\n"] if not args.use_cot else ["**STEP 5:"]
+            stop=stop_tokens
         )
 
         # Load VQA dataset
@@ -1072,75 +1346,105 @@ def main():
             test_df=few_shot_df,
             image_column=args.image_column,
             question_column=args.question_column,
-            images_dir=images_save_dir
+            images_dir=images_save_dir,
+            preproc_type=args.preproc_type
         )
 
         # Print sample conversations for quality inspection
         print_sample_conversations(conversations, num_samples=2 if args.use_cot else 3)
 
-        # Run chat inference
-        responses = run_chat_inference(model, conversations, sampling_params, args.batch_size, args.enable_thinking)
+        # Detect OctoMed model for special post-processing
+        use_octomed_clean = is_octomed_model(args.model_name)
+        if use_octomed_clean:
+            print(f"\n[OctoMed] Smart Cleaner ENABLED for model: {args.model_name}")
 
-        # Parse predictions and gold standard answers
-        # Enable verbose parsing for first few samples to verify CoT parsing
-        predicted_answers = []
-        for i, response in enumerate(responses):
-            verbose = (i < 3)  # Show parsing details for first 3 samples
-            parsed = parse_answer(response, use_cot=args.use_cot, verbose=verbose)
-            predicted_answers.append(parsed)
-
-            if verbose and args.use_cot:
-                print(f"\n[Sample {i}] CoT Response Parsing:")
-                print(f"  Raw response length: {len(response)} chars")
-                print(f"  Parsed answer: '{parsed}'")
-
+        # Pre-compute gold answers (needed for checkpointing)
         gold_answers = [parse_gold_answer(row[args.answer_column]) for _, row in df.iterrows()]
 
-        # Verify parsing quality for CoT
-        if args.use_cot:
-            print(f"\n{'='*60}")
-            print("CoT PARSING QUALITY CHECK")
-            print(f"{'='*60}")
-            avg_answer_length = np.mean([len(ans) for ans in predicted_answers])
-            avg_response_length = np.mean([len(resp) for resp in responses])
-            print(f"Average raw response length: {avg_response_length:.1f} chars")
-            print(f"Average parsed answer length: {avg_answer_length:.1f} chars")
-            print(f"Compression ratio: {(avg_answer_length/avg_response_length)*100:.1f}%")
-            print(f"{'='*60}\n")
+        # Set up checkpoint directory
+        checkpoint_dir = os.path.join(args.output_dir, "checkpoints") if args.checkpoint_interval > 0 else None
+
+        # Run chat inference (with optional checkpointing)
+        responses, checkpoint_predictions = run_chat_inference(
+            model, conversations, sampling_params, args.batch_size, args.enable_thinking,
+            checkpoint_interval=args.checkpoint_interval,
+            checkpoint_dir=checkpoint_dir,
+            model_name=args.model_name,
+            df=df, args=args,
+            gold_answers=gold_answers,
+            use_octomed_clean=use_octomed_clean
+        )
+
+        # Build predictions: use checkpoint-merged data if available, otherwise build here
+        if checkpoint_predictions:
+            detailed_predictions = checkpoint_predictions
+            predicted_answers = [p['predicted_answer'] for p in detailed_predictions]
+            print(f"[CHECKPOINT] Using {len(detailed_predictions)} merged predictions from checkpoints")
+        else:
+            # Parse predictions and gold standard answers
+            # Enable verbose parsing for first few samples to verify CoT parsing
+            predicted_answers = []
+            for i, response in enumerate(responses):
+                verbose = (i < 3)  # Show parsing details for first 3 samples
+                parsed = parse_answer(response, use_cot=args.use_cot, verbose=verbose)
+
+                # Apply OctoMed cleaning if applicable
+                if use_octomed_clean:
+                    parsed = clean_octomed_response(parsed, verbose=verbose)
+
+                predicted_answers.append(parsed)
+
+                if verbose and (args.use_cot or use_octomed_clean):
+                    print(f"\n[Sample {i}] Response Parsing:")
+                    print(f"  Raw response length: {len(response)} chars")
+                    print(f"  Parsed answer: '{parsed}'")
+
+            # Verify parsing quality for CoT / OctoMed
+            if args.use_cot or use_octomed_clean:
+                label = "OctoMed + CoT" if use_octomed_clean and args.use_cot else ("OctoMed" if use_octomed_clean else "CoT")
+                print(f"\n{'='*60}")
+                print(f"{label} PARSING QUALITY CHECK")
+                print(f"{'='*60}")
+                avg_answer_length = np.mean([len(ans) for ans in predicted_answers])
+                avg_response_length = np.mean([len(resp) for resp in responses])
+                print(f"Average raw response length: {avg_response_length:.1f} chars")
+                print(f"Average parsed answer length: {avg_answer_length:.1f} chars")
+                print(f"Compression ratio: {(avg_answer_length/avg_response_length)*100:.1f}%")
+                print(f"{'='*60}\n")
+
+            # Prepare detailed predictions for saving
+            detailed_predictions = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                # Get image reference (local file or saved file)
+                if images_save_dir:
+                    image_ref = os.path.join(images_save_dir, f"{i:06d}.png")
+                else:
+                    image_ref = row[args.image_column] if isinstance(row[args.image_column], str) else f"sample_{i}"
+
+                # Calculate individual metrics for this sample
+                correct = gold_answers[i].lower().strip() == predicted_answers[i].lower().strip()
+
+                detailed_predictions.append({
+                    'image_file': image_ref,
+                    'question': row[args.question_column],
+                    'reference_answer': gold_answers[i],
+                    'predicted_answer': predicted_answers[i],
+                    'raw_response': responses[i][:200] + "..." if len(responses[i]) > 200 else responses[i],
+                    'full_response': responses[i],
+                    'correct': correct,
+                    'use_cot': args.use_cot,
+                    'use_images': args.use_images,
+                    'use_few_shot': args.use_few_shot,
+                    'num_few_shot': args.num_few_shot if args.use_few_shot else 0,
+                    'answer_length': len(predicted_answers[i]),
+                    'response_length': len(responses[i])
+                })
 
         # Calculate metrics
         results = calculate_metrics(gold_answers, predicted_answers)
 
         # Print results
         print_metrics(results, "VQA")
-
-        # Prepare detailed predictions for saving
-        detailed_predictions = []
-        for i, (_, row) in enumerate(df.iterrows()):
-            # Get image reference (local file or saved file)
-            if images_save_dir:
-                image_ref = os.path.join(images_save_dir, f"{i:06d}.png")
-            else:
-                image_ref = row[args.image_column] if isinstance(row[args.image_column], str) else f"sample_{i}"
-
-            # Calculate individual metrics for this sample
-            correct = gold_answers[i].lower().strip() == predicted_answers[i].lower().strip()
-
-            detailed_predictions.append({
-                'image_file': image_ref,
-                'question': row[args.question_column],
-                'reference_answer': gold_answers[i],
-                'predicted_answer': predicted_answers[i],
-                'raw_response': responses[i] if not args.use_cot else responses[i][:200] + "..." if len(responses[i]) > 200 else responses[i],  # Truncate CoT for space
-                'full_response': responses[i],  # Keep full response for CoT analysis
-                'correct': correct,
-                'use_cot': args.use_cot,
-                'use_images': args.use_images,
-                'use_few_shot': args.use_few_shot,
-                'num_few_shot': args.num_few_shot if args.use_few_shot else 0,
-                'answer_length': len(predicted_answers[i]),
-                'response_length': len(responses[i])
-            })
 
         # Create model name suffix
         model_name_suffix = f"{args.model_name}"

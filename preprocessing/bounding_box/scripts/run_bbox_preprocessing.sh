@@ -92,8 +92,8 @@ CAM_VERSION="gScoreCAM"     # Optimal for precise localization
 SKIP_CRF="true"             # True = Faster, "raw" but separate boxes. False = More precise.
 ENABLE_BODY_MASK="true"     # Always enabled
 ENABLE_ANATOMICAL_CHECK="true"
-DRAW_LABELS="true"
-BOX_COLOR="255,0,255"         # BGR format for OpenCV (magenta)
+DRAW_LABELS="false"           # Set to "true" to draw predicted labels on debug images (not recommended for production)
+BOX_COLOR="0,0,255"         # BGR format for OpenCV (magenta)
 
 # --- Model Specifications ---
 MODEL_NAME="hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224"

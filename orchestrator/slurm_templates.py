@@ -55,9 +55,11 @@ echo "  Config: {config_file or '(default)'}"
 docker run --rm \\
     --name "metajob_${{SLURM_JOB_ID:-local}}_judge" \\
     --gpus "device=${{CUDA_VISIBLE_DEVICES:-0}}" \\
+    --memory=30g \\
     --shm-size=16g \\
     -v "$PHYS_DIR":/workspace \\
     -v /llms:/llms \\
+    -v /datasets:/datasets:ro \\
     -e HF_HOME=/llms \\
     -e HF_TOKEN="${{HF_TOKEN:-}}" \\
     "$IMAGE_NAME" \\
@@ -154,9 +156,11 @@ echo "[BRIDGE] VQA manifest found: $((MANIFEST_ROWS - 1)) image-question pairs"
 
 export DATA_FILE_OVERRIDE="$PREPROC_OUTPUT_DIR/vqa_manifest.csv"
 export VQA_IMAGE_PATH="$PREPROC_OUTPUT_DIR"
+export PREPROC_TYPE="{stage_key}"
 
 echo "[BRIDGE] DATA_FILE_OVERRIDE=$DATA_FILE_OVERRIDE"
 echo "[BRIDGE] VQA_IMAGE_PATH=$VQA_IMAGE_PATH"
+echo "[BRIDGE] PREPROC_TYPE=$PREPROC_TYPE"
 """
 
 
@@ -332,8 +336,11 @@ def generate_meta_job_sbatch(
         ])
 
         # Drain GPU VRAM between stages (not after the last stage)
+        # Also sleep briefly to let Docker fully release host resources
         if i < len(stage_commands):
             lines.append('wait_for_gpu_drain')
+            lines.append('echo "[COOLDOWN] Waiting 10s for Docker resource cleanup..."')
+            lines.append('sleep 10')
             lines.append("")
 
         # Inject bridge blocks for inter-stage data flow
