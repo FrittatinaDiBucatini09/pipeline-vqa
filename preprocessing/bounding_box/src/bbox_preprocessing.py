@@ -1551,10 +1551,29 @@ def main():
 
         # 7. Generate VQA-ready manifest for downstream pipeline stages
         try:
+            # Auto-detect answer column from predictions.jsonl keys
+            _answer_col = 'answer_text'  # default matching most datasets
+            _jsonl_path = output_root / "predictions.jsonl"
+            if _jsonl_path.exists():
+                with open(_jsonl_path, 'r') as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        try:
+                            _sample = json.loads(_line)
+                            for _candidate in ('answer', 'answer_text', 'reference_answer', 'Answer'):
+                                if _candidate in _sample and str(_sample[_candidate]).strip():
+                                    _answer_col = _candidate
+                                    break
+                        except json.JSONDecodeError:
+                            pass
+                        break  # only need to check the first valid record
+            print(f"[INFO] VQA manifest: detected answer column = '{_answer_col}'")
             generate_vqa_manifest(
                 output_root,
                 question_col=args.text_col,
-                answer_col='answer',
+                answer_col=_answer_col,
             )
         except Exception as e:
             print(f"[WARNING] VQA manifest generation error: {e}")

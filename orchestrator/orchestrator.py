@@ -331,6 +331,7 @@ def build_stage_command(stage: PipelineStage, cfg: StageConfig) -> dict:
         "name": stage.name,
         "command": command,
         "script_dir": abs_script_dir,
+        "config_file": cfg.config_file or "",
     }
 
 

@@ -6,10 +6,12 @@ Provides:
     (used inside the meta-job script).
   - generate_meta_job_sbatch(): Complete sbatch script that runs all selected
     pipeline stages sequentially in a single SLURM allocation.
+  - Preprocessing cache check blocks for skip logic and NER-aware invalidation.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List, Optional
 
 
@@ -164,6 +166,71 @@ echo "[BRIDGE] PREPROC_TYPE=$PREPROC_TYPE"
 """
 
 
+def _generate_cache_check_block(
+    stage_key: str,
+    script_dir: str,
+    config_file: str,
+    project_root: str,
+    original_command: str,
+) -> str:
+    """Generate bash snippet that wraps a preprocessing stage in a cache check.
+
+    If the cache is valid (fingerprint matches), the stage is skipped.
+    If the cache is invalid (or NER mismatch detected), old results are
+    cleaned and the stage is re-run. On success, a new cache state is written.
+
+    Args:
+        stage_key: The preprocessing stage key (e.g., "bbox_preproc").
+        script_dir: Absolute path to the preprocessing script directory.
+        config_file: Config file path relative to script_dir (or empty).
+        project_root: Absolute path to the project root.
+        original_command: The bash command(s) that run this stage.
+    """
+    output_subpath = _PREPROCESSING_OUTPUT_PATHS.get(stage_key, "results")
+    results_dir = f"{script_dir}/{output_subpath}"
+
+    # Build absolute config file path(s) for hash computation.
+    # Handles space-separated multi-config (e.g. segmentation step1 + step2).
+    if config_file:
+        parts = config_file.split()
+        abs_parts = [f"{script_dir}/{p}" for p in parts]
+        abs_config = " ".join(abs_parts)
+    else:
+        abs_config = ""
+
+    return f"""
+# --- CACHE CHECK: {stage_key} ---
+CACHE_RESULTS_DIR="{results_dir}"
+CACHE_CONFIG_FILE="{abs_config}"
+CACHE_UTIL="{project_root}/orchestrator/cache_utils.py"
+
+CACHE_ARGS="--results-dir $CACHE_RESULTS_DIR --dataset ${{DATA_FILE_OVERRIDE:-default}}"
+[ -n "$CACHE_CONFIG_FILE" ] && CACHE_ARGS="$CACHE_ARGS --config-file $CACHE_CONFIG_FILE"
+[ "$NER_ENABLED" = "true" ] && CACHE_ARGS="$CACHE_ARGS --ner-enabled"
+
+CACHE_OUTPUT=$(python3 "$CACHE_UTIL" check $CACHE_ARGS 2>&1) && CACHE_HIT=true || CACHE_HIT=false
+echo "$CACHE_OUTPUT"
+
+if [ "$CACHE_HIT" = "true" ]; then
+    echo "[CACHE-HIT] Identical preprocessing detected for {stage_key}. Skipping to next stage..."
+else
+    # NER mismatch requires cleaning old results to prevent data contamination
+    if echo "$CACHE_OUTPUT" | grep -q "NER configuration changed"; then
+        echo "[CACHE] Cleaning stale results due to NER mismatch..."
+        rm -rf "$CACHE_RESULTS_DIR"/*
+    fi
+
+    echo "[CACHE-MISS] Running {stage_key}..."
+
+    {original_command}
+
+    # Record cache state after successful completion
+    python3 "$CACHE_UTIL" write $CACHE_ARGS
+    echo "[CACHE] State recorded for {stage_key}."
+fi
+# --- END CACHE CHECK: {stage_key} ---"""
+
+
 def generate_meta_job_sbatch(
     stage_commands: List[Dict],
     run_dir: str,
@@ -225,6 +292,15 @@ def generate_meta_job_sbatch(
 
     if dataset_override:
         lines.append(f'export DATA_FILE_OVERRIDE="{dataset_override}"')
+
+    # Derive PROJECT_ROOT from run_dir (run_dir is PROJECT_ROOT/orchestrator_runs/run_*)
+    project_root = str(Path(run_dir).parent.parent)
+    lines.append(f'export PROJECT_ROOT="{project_root}"')
+
+    # NER tracking: set to "true" if medclip_routing is in the pipeline
+    _keys = stage_keys or []
+    ner_enabled = "true" if "medclip_routing" in _keys else "false"
+    lines.append(f'export NER_ENABLED="{ner_enabled}"')
 
     lines.append("")
 
@@ -321,6 +397,24 @@ def generate_meta_job_sbatch(
     for i, stage_cmd in enumerate(stage_commands, 1):
         name = stage_cmd["name"]
         command = stage_cmd["command"]
+        idx = i - 1  # 0-based index into keys
+
+        # Determine if this is a preprocessing stage eligible for caching
+        is_preproc = idx < len(keys) and keys[idx] in _PREPROCESSING_STAGE_KEYS
+
+        if is_preproc:
+            script_dir = stage_cmd.get("script_dir", "")
+            config_file = stage_cmd.get("config_file", "")
+            cached_command = _generate_cache_check_block(
+                stage_key=keys[idx],
+                script_dir=script_dir,
+                config_file=config_file,
+                project_root=project_root,
+                original_command=command,
+            )
+            effective_command = cached_command
+        else:
+            effective_command = command
 
         lines.extend([
             "# ==============================================================================",
@@ -329,7 +423,7 @@ def generate_meta_job_sbatch(
             f'CURRENT_STEP="{i} - {name}"',
             f'echo "[$(date \'+%Y-%m-%d %H:%M:%S\')] START: $CURRENT_STEP"',
             "",
-            command,
+            effective_command,
             "",
             f'echo "[$(date \'+%Y-%m-%d %H:%M:%S\')] DONE:  $CURRENT_STEP"',
             "",
@@ -344,7 +438,7 @@ def generate_meta_job_sbatch(
             lines.append("")
 
         # Inject bridge blocks for inter-stage data flow
-        idx = i - 1  # 0-based index into keys
+        # (idx already set above as i - 1)
 
         # Bridge: medclip_routing -> any preprocessing stage
         if (idx < len(keys) - 1

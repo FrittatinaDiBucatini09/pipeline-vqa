@@ -1,0 +1,17 @@
+============================================================
+Pipeline Orchestrator Run Report
+============================================================
+Timestamp : 2026-02-23 03:40:28
+Run Dir   : /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/run_20260223_034028
+Job ID    : 7930402
+Dry Run   : False
+Dataset   : mimic_ext_stratified_7000_samples.csv
+
+------------------------------------------------------------
+Step   Stage                          Config                        
+------------------------------------------------------------
+1      Preprocessing: Segmentation    TARGET_MODE=all               
+2      VQA Generation                 configs/generation/medgemma_4b.conf
+3      VQA Evaluation (Judge)         configs/judge/hard_coded_judge.conf
+
+============================================================

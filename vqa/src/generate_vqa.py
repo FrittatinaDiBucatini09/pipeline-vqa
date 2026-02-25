@@ -482,6 +482,50 @@ def is_octomed_model(model_name: str) -> bool:
     return 'octomed' in model_name.lower()
 
 
+def sanitize_for_rouge(text: str) -> str:
+    """Sanitize LLM output for ROUGE evaluation.
+
+    Removes predictable noise that instruction-tuned models inject
+    (markdown markers, XML tags, boilerplate prefixes) while preserving
+    the actual informational content.  Applied to *both* predicted and
+    reference answers so the comparison is symmetric.
+
+    This augments (not replaces) the existing parse_answer / clean_octomed
+    cleaners which run earlier in the pipeline.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+
+    s = text
+
+    # 1. Remove XML-style tags (e.g. <answer>, </answer>, <output>, <think>)
+    s = re.sub(r'</?[a-zA-Z][a-zA-Z0-9_]*\s*/?>', '', s)
+
+    # 2. Remove markdown bold/italic prefix patterns around "Answer"
+    #    e.g. "**Answer:**", "Answer:**", "*Answer:*", "**Final Answer:**"
+    s = re.sub(
+        r'^\s*\*{0,3}\s*(?:Final\s+)?Answer\s*:?\s*\*{0,3}\s*',
+        '', s, flags=re.IGNORECASE
+    )
+
+    # 3. Strip remaining markdown bold/italic wrappers
+    s = re.sub(r'\*{1,3}', '', s)
+
+    # 4. Remove newlines and carriage returns
+    s = s.replace('\n', ' ').replace('\r', ' ')
+
+    # 5. Remove common boilerplate prefixes from instruction-tuned models
+    s = re.sub(
+        r'^(Based on (the )?(provided )?(image|X-ray|radiograph|scan),?\s*)',
+        '', s, flags=re.IGNORECASE
+    )
+
+    # 6. Collapse multiple spaces
+    s = ' '.join(s.split())
+
+    return s.strip()
+
+
 def save_checkpoint(predictions: list, output_dir: str, model_name: str, checkpoint_num: int):
     """Save a checkpoint of predictions to disk.
 
@@ -583,9 +627,13 @@ def calculate_metrics(y_true_answers: List[str], y_pred_answers: List[str]) -> D
         if true_normalized == pred_normalized:
             exact_matches += 1
 
+        # Sanitize both sides before ROUGE to remove predictable noise
+        true_sanitized = sanitize_for_rouge(true_normalized)
+        pred_sanitized = sanitize_for_rouge(pred_normalized)
+
         # Calculate ROUGE scores
-        if true_normalized and pred_normalized:  # Only if both are non-empty
-            scores = scorer.score(true_normalized, pred_normalized)
+        if true_sanitized and pred_sanitized:  # Only if both are non-empty
+            scores = scorer.score(true_sanitized, pred_sanitized)
             rouge1_scores.append(scores['rouge1'].fmeasure)
             rouge2_scores.append(scores['rouge2'].fmeasure)
             rougeL_scores.append(scores['rougeL'].fmeasure)
@@ -1261,7 +1309,7 @@ def main():
         elif args.use_cot:
             stop_tokens = ["**STEP 5:"]
         else:
-            stop_tokens = ["\n\n"]
+            stop_tokens = None
 
         sampling_params = SamplingParams(
             temperature=args.temperature,

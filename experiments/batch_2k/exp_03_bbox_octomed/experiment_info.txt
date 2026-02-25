@@ -1,0 +1,6 @@
+Experiment: BBox + OctoMed 7B
+Dataset:    mimic_ext_stratified_2000_samples.csv
+Stages:     bbox_preproc -> vqa_gen -> vqa_judge
+Time limit: 10:00:00
+Run dir:    /home/rbalzani/medical-vqa/Thesis/orchestrator_runs/batch_2k_bbox_octomed_20260225_034316
+Generated:  20260225_034316

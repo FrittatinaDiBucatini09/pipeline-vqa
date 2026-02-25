@@ -35,8 +35,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 import os
 import time
+import threading
 from transformers import AutoTokenizer
 import wandb
+
+# Thread-safe counter for async I/O failures (e.g. ENOSPC)
+_io_fail_count = 0
+_io_fail_lock = threading.Lock()
 
 
 def _init_wandb_safe(**kwargs):
@@ -550,9 +555,10 @@ def generate_vqa_manifest(manifest_records: List[Dict], output_root: Path) -> No
     print(f"[INFO] VQA manifest generated: {manifest_path} ({len(df)} rows)")
 
 
-def _save_heatmap_async(cam_map, original_bgr, save_path, alpha, colormap, 
+def _save_heatmap_async(cam_map, original_bgr, save_path, alpha, colormap,
                         body_mask, save_raw_cam, prompt):
     """Thread-safe wrapper for async heatmap saving."""
+    global _io_fail_count
     try:
         generate_and_save_heatmap(
             cam_map=cam_map,
@@ -564,8 +570,12 @@ def _save_heatmap_async(cam_map, original_bgr, save_path, alpha, colormap,
             save_raw_cam=save_raw_cam,
             prompt=prompt
         )
+        return True
     except Exception as e:
+        with _io_fail_lock:
+            _io_fail_count += 1
         print(f"[ERROR Async Save] {save_path}: {e}")
+        return False
 
 
 # ==============================================================================
@@ -973,6 +983,9 @@ def main():
         try:
             io_executor.shutdown(wait=True, cancel_futures=False)
             print("[CLEANUP] I/O executor shut down.")
+            if _io_fail_count > 0:
+                print(f"[ERROR] {_io_fail_count} async I/O writes failed (disk full?).")
+                failed_count += _io_fail_count
         except Exception as e:
             print(f"[WARNING] I/O executor shutdown error: {e}")
 
@@ -1074,12 +1087,17 @@ if __name__ == "__main__":
     print("\n[INFO] Initializing Attention Map Pipeline...")
     main()
 
+    # Determine exit code: non-zero if any I/O writes failed
+    _exit_code = 1 if _io_fail_count > 0 else 0
+    if _exit_code != 0:
+        print(f"[EXIT] Exiting with code {_exit_code} due to {_io_fail_count} I/O failures.")
+
     # Forced exit to prevent zombie processes from deadlocked third-party threads
     print("[EXIT] Requesting interpreter shutdown...")
     try:
-        sys.exit(0)
+        sys.exit(_exit_code)
     except SystemExit:
         pass
     finally:
-        print("[EXIT] Forcing process termination (os._exit).")
-        os._exit(0)
+        print(f"[EXIT] Forcing process termination (os._exit({_exit_code})).")
+        os._exit(_exit_code)

@@ -167,6 +167,14 @@ if [ ! -d "/datasets/MIMIC-CXR" ]; then
     exit 1
 fi
 
+# Check 5: Disk Space (require at least 20 GB free to avoid mid-run ENOSPC)
+AVAIL_GB=$(df --output=avail -BG "$OUTPUT_DIR" 2>/dev/null | tail -1 | tr -dc '0-9')
+if [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -lt 20 ]; then
+    echo "❌ [CRITICAL ERROR] Insufficient disk space!"
+    echo "   Only ${AVAIL_GB}G available on $(df --output=target "$OUTPUT_DIR" | tail -1). Need ≥20G."
+    exit 1
+fi
+
 # Check 4: Metadata File Existence
 if [ ! -f "$METADATA_DIR/$METADATA_FILENAME" ]; then
     echo "❌ [CRITICAL ERROR] Metadata file not found!"

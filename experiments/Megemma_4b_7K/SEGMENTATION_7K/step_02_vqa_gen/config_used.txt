@@ -1,0 +1,1 @@
+configs/generation/medgemma_4b.conf
